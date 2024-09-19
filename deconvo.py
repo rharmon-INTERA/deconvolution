@@ -6,6 +6,7 @@ from scipy.optimize import minimize
 import time as tm
 import pandas as pd
 from scipy.stats import norm
+from scipy.optimize import minimize
 %matplotlib widget
 
 # Seed based on the clock
@@ -30,47 +31,51 @@ def chapeau(dt=0.1):
     x_t = input_signal(t_x)
     s_t = transfer_function(t_s)
 
-    # Perform the convolution of x(t) and s(t) using numpy's convolve function with mode='full'
-    y_t = np.convolve(x_t, s_t, mode='full') * dt
+    # Lengths of the input signal and transfer function
+    n_x = len(x_t)
+    n_s = len(s_t)
+    n_y = n_x + n_s - 1  # Length of the convolution result
 
-    # Create the time vector for the convolution result (it should span from 0 to t_x[-1] + t_s[-1])
-    t_conv = np.arange(0, len(y_t) * dt, dt)
+    # Zero-pad x_t and s_t to match the convolution length
+    x_padded = np.pad(x_t, (0, n_s - 1), 'constant')
+    s_padded = np.pad(s_t, (0, n_x - 1), 'constant')
 
-    # Plot the input signal x(t)
-    plt.figure(figsize=(10, 6))
+    # Construct the convolution matrix J using the padded x_t
+    c = dt * x_padded  # First column of the Toeplitz matrix
+    r = np.zeros(n_y)  # First row of the Toeplitz matrix (zeros)
+    J = la.toeplitz(c, r)
 
+    # Convolve:
+    y_t = J @ s_padded
+    # Time values for the convolution result y(t)
+    t_y = np.arange(0, n_y * dt, dt)
+
+    # Generate figures:
+    plt.figure(figsize=(12, 8))
+
+    # Plot input signal x(t)
     plt.subplot(3, 1, 1)
-    plt.plot(t_x, x_t, label='Input Signal x(t)', color='blue')
+    plt.plot(t_x, x_t, 'b')
     plt.title('Input Signal x(t)')
-    plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
-    plt.grid(True)
-    plt.legend()
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
 
-    # Plot the transfer function s(t)
+    # Plot transfer function s(t)
     plt.subplot(3, 1, 2)
-    plt.plot(t_s, s_t, label='Transfer Function s(t)', color='orange')
+    plt.plot(t_s, s_t, 'g')
     plt.title('Transfer Function s(t)')
-    plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
-    plt.grid(True)
-    plt.legend()
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
 
-    # Plot the convolution result
+    # Plot convolution result y(t)
     plt.subplot(3, 1, 3)
-    plt.plot(t_conv, y_t, label='Convolution of x(t) and s(t)', color='green')
-    plt.title('Convolution Result (x(t) * s(t))')
-    plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
-    plt.grid(True)
-    plt.legend()
-
+    plt.plot(t_y, y_t, 'r')
+    plt.title('Convolution Result y(t)')
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
     plt.tight_layout()
-    plt.show()
-
-    # make x(t) same length as t_conv
-    temp = np.zeros(len(t_conv))
-    temp[:len(x_t)] = x_t
-    x_t = temp
     
-    return t_conv, x_t, s_t, y_t
+    return t_y, x_padded, y_t
 
 
 def neu_and_mars(dt=0.1):
@@ -143,6 +148,78 @@ def neu_and_mars(dt=0.1):
     return t_conv, x_t, s_t, y_t
 
 
+def bimodal(dt=0.006):
+    # Time vector for x(t) and s(t)
+    t_x = np.linspace(0, 3, 500)
+
+    # Parameters for x(t)
+    mean_val = 1.5
+    sd_val = 0.5
+    scale_factor = 1000
+
+    # Compute x(t) as a scaled normal distribution N(1.5, 0.5)
+    x_t = norm.pdf(t_x, mean_val, sd_val) * scale_factor
+
+    # Parameters for s(t)
+    mean_val_1 = 1
+    sd_val_1 = 0.2
+    mean_val_2 = 2
+    sd_val_2 = 0.2
+
+    # Compute s(t) as the sum of two normal distributions
+    s_t = norm.pdf(t_x, mean_val_1, sd_val_1) + (norm.pdf(t_x, mean_val_2, sd_val_2) / 2)
+
+    # Time increment
+    dt = t_x[1] - t_x[0]
+
+    # Lengths of the signals
+    N_x = len(x_t)
+    N_s = len(s_t)
+    N_y = N_x + N_s - 1
+
+    # Construct the convolution matrix J
+    J = np.zeros((N_y, N_s))
+    for i in range(N_s):
+        J[i:i + N_x, i] = x_t
+
+    # Perform the convolution using matrix multiplication
+    y_t = J @ s_t * dt
+
+    # Time vector for y_t
+    t_y = np.arange(len(y_t)) * dt
+
+    # Plot the signals for visualization
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(3, 1, 1)
+    plt.plot(t_x, x_t)
+    plt.title('Input Signal x(t)')
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
+
+    plt.subplot(3, 1, 2)
+    plt.plot(t_x, s_t)
+    plt.title('Transfer Function s(t)')
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
+
+    plt.subplot(3, 1, 3)
+    plt.plot(t_y, y_t)
+    plt.title('Output Signal y(t) = x(t) * s(t)')
+    plt.xlabel('Time')
+    plt.ylabel('Amplitude')
+
+    plt.tight_layout()
+    plt.show()
+
+    # pad x(t) and s(t) to match the length of the convolution result
+    x_t_padded = np.pad(x_t, (0, N_y - N_x), 'constant')
+    s_t_padded = np.pad(s_t, (0, N_y - N_s), 'constant')
+    
+    # Return the signals and time vectors
+    return t_y,x_t_padded,y_t
+
+
 def bimodal(dt=0.1):
     
     
@@ -167,17 +244,24 @@ def bimodal(dt=0.1):
 
     # Time values for the convolution from 0 to 6
     t_values_conv = np.linspace(0, 6, 500)
+    dt = t_values_conv[1] - t_values_conv[0]
     x_t_extended = np.pad(x_t, (0, len(t_values_conv) - len(t_x)), 'constant')
     s_t_extended = np.pad(s_t, (0, len(t_values_conv) - len(t_x)), 'constant')
     
-    y_t_conv_full_corrected = np.convolve(x_t_extended, s_t_extended, mode='full') * (t_values_conv[1] - t_values_conv[0])
+    n_x = len(x_t_extended)
+    n_s = len(s_t_extended)
+    n_y = n_x + n_s - 1  # Length of the convolution result
+    
+    # Construct the convolution matrix J using the padded x_t
+    c = dt * x_t_extended  # First column of the Toeplitz matrix
+    r = np.zeros(n_y)  # First row of the Toeplitz matrix (zeros)
+    J = la.toeplitz(c, r)
 
-    # Normalize the result to ensure the peak value is approximately 800
-    scaling_factor = 800 / np.max(y_t_conv_full_corrected)
-    y_t_conv_full_corrected *= scaling_factor
-
-    # Generate time values for the full convolution (since 'full' extends the length)
-    t_values_conv_full = np.linspace(0, 6, len(y_t_conv_full_corrected))  # Adjust length to match the full convolution
+    # Convolve:
+    y_t = J @ s_t_extended
+    # Time values for the convolution result y(t)
+    t_y = np.arange(0, n_y * dt, dt)
+    
 
     # Plot the combined graphs with subplots
     fig, ax1 = plt.subplots(2, 1, figsize=(10, 10))
@@ -226,8 +310,7 @@ def bimodal(dt=0.1):
     return t_full, x_t_full, s_t_full, y_t_full
     
 
-
-def load_gambill_data(ws=os.path.join('medQ'),prefix='medQ_R2'):
+def load_gambill_data(ws=os.path.join('test_datasets','gambill','data'),prefix='medQ_R2'):
     data = pd.read_csv(os.path.join(ws, prefix + '.csv'))
     time = data['time'].values
     in_signal = data['in'].values
@@ -236,40 +319,55 @@ def load_gambill_data(ws=os.path.join('medQ'),prefix='medQ_R2'):
     return time, in_signal, out_signal
 
 
-def py_deconv_dave(time, in_signal, out_signal):
+
+def deconv(num_dets, time, in_signal, out_signal):
     # Numerical details
-    theta = 5 # max cov at 0 lag
-    corr_time = 24 
-    sigma = 0.231 # correlated noise
-    sigma_max = 0.4 # max val of correlated noise
-    n_h = 64  # Length of transfer-function vector
-    nreal = 10  # Number of realizations
+    theta = num_dets['theta'] # max cov at 0 lag
+    corr_time = num_dets['corr_time'] # correlation time
+    sigma = num_dets['sigma'] # std dev of noise
+    sigma_max = num_dets['sigma_max'] # max std dev of noise
+    nreal = num_dets['nreal'] # number of realizations
+    n_h = num_dets['n_h'] # number of convolution points
 
     # Input and output signals
     x = in_signal
     y = out_signal
     t = time
     dt = time[1] - time[0]
+    
+    if n_h is None:
+        max_transfer_time = 8.0  # Maximum expected duration of the transfer function
+        n_h = int(np.ceil(max_transfer_time / dt))
+    
     corr_time = min(n_h * dt, corr_time)
     n_corr_time = int(np.ceil(corr_time / dt))
-
+    
     # Construction of Jacobian (convolution matrix)
-    c = dt * x
-    r = np.zeros(n_h)
-    J = la.toeplitz(c, r)
+    n_y = len(y)
+
+    # Pad x to length n_y
+    x_padded = np.pad(x, (0, n_y - len(x)), 'constant')
+
+    # First column of the Toeplitz matrix for J
+    c_J = dt * x_padded[:n_y]
+    r_J = np.zeros(n_h)
+
+    # Construct the convolution matrix J
+    J = la.toeplitz(c_J, r_J)
 
     theta_old = 0
 
     while abs(theta_old - theta) / theta > 0.01:
         print(f'Current theta: {theta}, convergence: {abs(theta_old - theta) / theta}')
         theta_old = theta 
-
         # Generalized covariance matrix construction
-        co = np.arange(n_h, 0, -1) * dt * theta  # Olaf's method
-        c[:n_corr_time] = np.arange(n_corr_time, 0, -1) * dt * theta  # DAB's approx linear cov function
-        print(baba)
+        #co = np.arange(n_h, 0, -1) * dt * theta  # Olaf's method
+        #co[:n_corr_time] = np.arange(n_corr_time, 0, -1) * dt * theta  # DAB's approx linear cov function
         
-        Q = la.toeplitz(c)
+        co = np.zeros(n_h)
+        co[:n_corr_time] = np.arange(n_corr_time, 0, -1) * dt * theta
+        
+        Q = la.toeplitz(co)
         C = la.cholesky(Q)
         iQ = la.inv(Q)
 
@@ -317,7 +415,8 @@ def py_deconv_dave(time, in_signal, out_signal):
             sigma = np.sqrt(((y - sim).T @ (y - sim)) / (len(y) - n_h + nL - 1))
             sigma = min(sigma, sigma_max)
             print(f'iteration {iter}, sigma: {sigma}, number of Lagrange mults: {nL}')
-            
+            # if sigma is nan
+
             hL_old = hL
             hL_add = ii[h_be < 0]
             hL = np.array(hL)
@@ -394,7 +493,9 @@ def py_deconv_dave(time, in_signal, out_signal):
         
             # Plot realization
             t_h = dt * np.arange(n_h)
-            h_all[:, ireal] = h
+            
+            
+            
             plt.subplot(3, 1, 1)
             plt.plot(t, y + me, '-r', t, sim, '-k')
             plt.xlabel('t [hr]')
@@ -424,7 +525,28 @@ def py_deconv_dave(time, in_signal, out_signal):
             if not np.setdiff1d(hL_old, hL).size and not np.setdiff1d(hL, hL_old).size:
                 print('breaking...')
                 break
+        h_all[:, ireal] = h
+    # Define the objective function for theta optimization
+    def sumprob(lntheta):
+        theta_val = np.exp(lntheta)
+        lnpsum = 0.0
+        for ireal in range(nreal):
+            h_i = h_all[:, ireal]
+            nnz = np.sum(h_i > 0)
+            ng = n_h
+            nz = ng - nnz
+            lnp_i = -nnz / 2 * np.log(4 * np.pi * theta_val) - (ng - 1) / 2 * np.log(1)
+            # Loop over all entries
+            for jj in range(ng - 1):
+                lnp_i -= (h_i[jj + 1] - h_i[jj]) ** 2 / (4 * theta_val)
+            lnpsum -= lnp_i
+        return lnpsum
 
+    # Update theta using optimization
+    theta_old = theta
+    res = minimize(sumprob, np.log(theta), method='Nelder-Mead')
+    theta = np.exp(res.x[0])
+        
     # Save the results
     #np.savez(prefix + '_transfer_func_condreal.npz', t_h=t_h, h=h_be, h_all=h_all, theta=theta, sigma=sigma)
 
@@ -456,7 +578,7 @@ def py_deconv_dave(time, in_signal, out_signal):
     ax.set_ylabel('g [1/hr]')
     ax.plot(t_h, np.percentile(h_all[:, :ireal + 1], 10, axis=1), '--r')
     ax.plot(t_h, np.percentile(h_all[:, :ireal + 1], 90, axis=1), '--r', label='10th and 90th percentiles')
-    ax.plot(tplot, InvG, 'b--', label='early times of advect\dispers\nwith best-fit velocity and dispersion coeff')
+    #ax.plot(tplot, InvG, 'b--', label='early times of advect\dispers\nwith best-fit velocity and dispersion coeff')
     ax.legend()
     txt = f"Kernel stats:\nmass: {m_0}\nmean (hr): {m_1}\nVar (hr^2): {var}"
     plt.text(0.01, 1.05, txt, fontsize=12, transform=ax.transAxes,
@@ -467,21 +589,23 @@ def py_deconv_dave(time, in_signal, out_signal):
          bbox=dict(facecolor='lightgray', edgecolor='black', boxstyle='round,pad=0.5'))
 
 
-
 if __name__ == '__main__':
     print('Running deconvolution...')
     
     # run Gambill data:
-    time, in_signal, out_signal = load_gambill_data(ws=os.path.join('medQ'),prefix='medQ_R2')
-    py_deconv_dave(time, in_signal, out_signal)
+    num_dets = {'theta': 5, 'corr_time': 24, 'sigma': 0.231, 'sigma_max': 0.4, 'n_h': 64, 'nreal': 10}
+    time, in_signal, out_signal = load_gambill_data(prefix='medQ_R2')
+    deconv(num_dets, time, in_signal, out_signal)
     
     # run chapeau function:
-    time, in_signal, transfer_fx ,out_signal = chapeau()
+    time, in_signal,out_signal = chapeau()
+    num_dets = {'theta': 2, 'corr_time': 8, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    py_deconv_dave(time, in_signal, out_signal)
+    deconv(num_dets, time, in_signal, out_signal)
     
     # bimodal example:
-    time, in_signal, transfer_fx ,out_signal = bimodal(dt=0.1)
+    time, in_signal,out_signal = bimodal(dt=0.006)
+    num_dets = {'theta': 2, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    py_deconv_dave(time, in_signal, out_signal)
+    deconv(num_dets,time, in_signal, out_signal)
     
