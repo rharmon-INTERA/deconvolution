@@ -9,9 +9,10 @@ import time as tm
 import pandas as pd
 from scipy.stats import norm
 from scipy.optimize import minimize
-#%matplotlib widget
-%matplotlib inline
+%matplotlib widget
 
+
+import matplotlib.animation as animation
 
 # Seed based on the clock
 np.random.seed(int(sum(100 * np.array(list(tm.localtime())))))
@@ -111,6 +112,10 @@ def chapeau(dt=0.1):
 
 
 def neu_and_mars(dt=0.1):
+    ex_nm='neu_and_mars'
+    outdir = os.path.join('test_datasets', ex_nm)
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
     # Neuman and de Marsily (176) example:
     # Generate the time values based on the time step
     t_x = np.arange(0, 1 + dt, dt)  # Time values for the input signal x(t), injected between 0 and 1
@@ -138,10 +143,27 @@ def neu_and_mars(dt=0.1):
     s_t = transfer_function(t_s)
 
     # Perform the convolution of x(t) and s(t) using numpy's convolve function with mode='full'
-    y_t = np.convolve(x_t, s_t, mode='full') * dt
+    #y_t = np.convolve(x_t, s_t, mode='full') * dt
 
-    # Create the time vector for the convolution result (it should span from 0 to t_x[-1] + t_s[-1])
-    t_conv = np.arange(0, len(y_t) * dt, dt)
+    # Lengths of the input signal and transfer function
+    n_x = len(x_t)
+    n_s = len(s_t)
+    n_y = n_x + n_s - 1  # Length of the convolution result
+    
+    # Zero-pad x_t and s_t to match the convolution length
+    x_padded = np.pad(x_t, (0, n_s - 1), 'constant')
+    s_padded = np.pad(s_t, (0, n_x - 1), 'constant')
+    
+    # Construct the convolution matrix J using the padded x_t
+    c = dt * x_padded  # First column of the Toeplitz matrix
+    r = np.zeros(n_y)  # First row of the Toeplitz matrix (zeros)
+    J = la.toeplitz(c, r)
+    
+    # Convolve:
+    y_t = J @ s_padded
+    # Time values for the convolution result y(t)
+    t_y = np.arange(0, n_y * dt, dt)
+    
 
     # Plot the input signal x(t)
     plt.figure(figsize=(10, 6))
@@ -163,7 +185,7 @@ def neu_and_mars(dt=0.1):
 
     # Plot the convolution result
     plt.subplot(3, 1, 3)
-    plt.plot(t_conv, y_t, label='Convolution of x(t) and s(t)', color='green')
+    plt.plot(t_y, y_t, label='Convolution of x(t) and s(t)', color='green')
     plt.title('Convolution Result (x(t) * s(t))')
     plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
     plt.grid(True)
@@ -171,13 +193,24 @@ def neu_and_mars(dt=0.1):
 
     plt.tight_layout()
     plt.show()
+    
+    df = pd.DataFrame({'time': t_y, 'in': x_padded, 'out': y_t, 'known_transfer_fx': s_padded})
+    df.to_csv(os.path.join(outdir, f'{ex_nm}_data.csv'), index=False)
+    
+    exdir = os.path.join('examples', ex_nm)
+    if not os.path.exists(exdir):
+        os.makedirs(exdir)
+        os.makedirs(os.path.join(exdir, 'figs'))
+        os.makedirs(os.path.join(exdir, 'data'))
+    df.to_csv(os.path.join(exdir, 'data', f'{ex_nm}_data.csv'), index=False)
+    plt.savefig(os.path.join(exdir, 'figs', f'{ex_nm}_fig.png'))
 
     # make x(t) same length as t_conv
-    temp = np.zeros(len(t_conv))
-    temp[:len(x_t)] = x_t
-    x_t = temp
+    #temp = np.zeros(len(t_conv))
+    #temp[:len(x_t)] = x_t
+    #x_t = temp
     
-    return t_conv, x_t, s_t, y_t
+    return t_y, x_padded, y_t
 
 
 def bimodal(dt=0.006):
@@ -251,6 +284,28 @@ def bimodal(dt=0.006):
     # Return the signals and time vectors
     return t_y,x_t_padded,y_t
 
+
+def load_gooseff_data(ws=os.path.join('test_datasets','gooseff'),prefix='1'):
+    data_in = pd.read_csv(os.path.join(ws, 'in'+ prefix + '.txt'), header=None)
+    data_in.columns = ['in']
+    time = pd.read_csv(os.path.join(ws, 'time.txt'),header=None)
+    time.columns = ['time']
+    
+    data_out = pd.read_csv(os.path.join(ws, 'out' + prefix + '.txt'), header=None)
+    data_out.columns = ['out']
+    
+    in_signal = data_in['in'].values
+    out_signal = data_out['out'].values
+    
+    outdir = os.path.join('examples',f'goosef_STS_zn{prefix}','data')
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    data = pd.DataFrame({'time': time.values.flatten(), 'in': in_signal, 'out': out_signal})
+    data.to_csv(os.path.join(outdir, f'{prefix}.csv'), index=False)
+    time = data['time'].values
+    
+    return time, in_signal, out_signal
+    
 
 def load_gambill_data(ws=os.path.join('test_datasets','gambill','data'),prefix='medQ_R2'):
     data = pd.read_csv(os.path.join(ws, prefix + '.csv'))
@@ -351,7 +406,6 @@ def deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=''):
 
             mat = np.block([[umat, Lmat], [Lmat.T, np.zeros((nL, nL))]])
             rhs = np.concatenate([urhs, Lrhs])
-            print(abba)
             a = np.diag(mat).copy()
             a[n_h + 1:] = 1
             a_inv = np.diag(a ** -1)  # Create the diagonal matrix with 1/a
@@ -452,7 +506,6 @@ def deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=''):
         
             # Plot realization
             t_h = dt * np.arange(n_h)
-            
             
             fig.suptitle(f'Realization {ireal}', fontsize=14)
             
@@ -592,7 +645,6 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
     
     corr_time = min(n_h * dt, corr_time)  # Adjust corr_time
     n_corr_time = int(np.ceil(corr_time / dt))
-    n_corr_time = 7
     # Initial covariance
     cov = np.zeros(n_h)
     cov[:n_corr_time] = (theta / n_corr_time) * np.arange(n_corr_time, 0, -1)
@@ -609,7 +661,8 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
     # J = la.toeplitz(c_J, r_J)
     
     theta_old = 0
-    while abs(theta_old - theta) / theta > 0.02:
+    major_while_cnt = 0
+    while abs(theta_old - theta) / theta > 0.01:
         # Construction of generalized covariance matrix
         c = cov.copy()
         Q = la.toeplitz(c)
@@ -642,8 +695,9 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
             mat = np.block([[umat, Lmat], [Lmat.T, np.zeros((nL, nL))]])
             rhs = np.concatenate([urhs, Lrhs])
         
-            a = np.diag(mat)
-            a = np.where(a != 0, a, 1)
+            a = np.diag(mat).copy()
+            #a = np.where(a != 0, a, 1)
+            a[(n_h + 1):] = 1
             imat = la.inv(np.diag(1 / a) @ mat) @ np.diag(1 / a)
             sol = imat @ rhs
             h_be = sol[:n_h] + sol[n_h]
@@ -651,9 +705,10 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
             h_be[hL] = 0
             nu = sol[n_h + 1:].flatten()
             sim = J @ h_be
-            sigma = np.sqrt(np.sum((y - sim) ** 2) / (len(y) - n_h + nL - 1))
+            #sigma = np.sqrt(np.sum((y - sim) ** 2) / (len(y) - n_h + nL - 1))
+            sigma = np.sqrt(((y - sim).T @ (y - sim)) / (len(y) - n_h + nL - 1))
             sigma = min(sigma, sigma_max)
-            print(f"Iteration {iter}: sigma = {sigma:.3g}, number of Lagrange multipliers {nL}")
+            #print(f"    Iteration {iter}: sigma = {sigma:.3g}, number of Lagrange multipliers {nL}")
             hLold = hL.copy()
             
             # Set of entries that need Lagrange multiplier
@@ -664,15 +719,19 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
             hL = sorted(set(hL) | set(hLadd))
             nL = len(hL)
             if not np.setdiff1d(hLold, hL).size and not np.setdiff1d(hL, hLold).size:
-                print('breaking...')
                 break
      
         # Initialize sum of h and sum of h squared
         h_all = np.zeros((n_h, nreal))
-
+       
         # Loop over all realizations
         ireal = 0
-        while ireal < nreal:
+        rmse_list = []
+        fig, [ax1, ax2, ax3] = plt.subplots(3, 1, figsize=(10, 8))
+        while ireal<nreal-1:
+            fout = os.path.join(sdir, f'realization_{ireal}')
+            if not os.path.exists(fout):
+                os.makedirs(fout)
             # Unconditional realization
             h_uc = C.T @ np.random.randn(n_h)
             # Measurement error
@@ -703,7 +762,8 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
                 rhs = np.concatenate([urhs, Lrhs])
 
                 a = np.diag(mat).copy()
-                a = np.where(a != 0, a, 1)
+                #a = np.where(a != 0, a, 1)
+                a[(n_h + 1):] = 1
                 imat = la.inv(np.diag(1 / a) @ mat) @ np.diag(1 / a)
                 sol = imat @ rhs
                 h = sol[:n_h] + sol[n_h] + h_uc
@@ -711,24 +771,8 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
                 h[hL] = 0
                 nu = sol[n_h + 1:].flatten()
                 sim = J @ h
-                print(f"Iteration {iter}: number of Lagrange multipliers {nL}")
-
-                # Plotting (optional)
-                plt.figure(1)
-                plt.clf()
-                plt.subplot(3, 1, 1)
-                plt.plot(t, y + me, '-r', label='meas.')
-                plt.plot(t, sim, '-k', label='sim.')
-                plt.xlabel('t [hr]')
-                plt.legend()
-                plt.title(f'Output after iteration {iter}')
-                plt.subplot(3, 1, 2)
-                plt.plot(np.arange(n_h) * dt, h, 'k')
-                plt.title(f'Transfer function after iteration {iter}')
-                plt.xlabel(r'$\tau$ [hr]')
-                plt.draw()
-                plt.pause(0.001)
-
+                #print(f"    Realizatiom {ireal}, iteration {iter}, number of Lagrange multipliers {nL}")
+                
                 hLold = hL.copy()
                 # Set of entries that need Lagrange multiplier
                 hLadd = ii[h < 0]
@@ -737,23 +781,63 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
                 hL = [h for h in hL if h not in hLrem]
                 hL = sorted(set(hL) | set(hLadd))
                 nL = len(hL)
+                
+                t_h = dt * np.arange(n_h)
+                
+                fig.suptitle(f'Realization {ireal}', fontsize=14)
+            
+                ax1.plot(t, y + me, '-r',label='measured')
+                ax1.plot(t, sim, '--k',label='simulated')
+                ax1.set_ylabel('Concentration, C(t)')
+                ax1.set_title(f'Output after iteration {iter}')
+                ax1.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+                ax1.tick_params(axis='both', direction='in',top=True,right=True)
+                if iter == 0:
+                    ax1.legend() 
+                ax2.plot(np.arange(n_h) * dt, h, 'k',label='transfer fx, h(t)',linewidth=.5,alpha=.5)
+                ax2.set_title(f'Transfer function after iteration {iter}')
+                #ax2.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+                ax2.tick_params(axis='both', direction='in',top=True,right=True)
+                
+                plt.tight_layout()
+                plt.savefig(os.path.join(fout, f'iteration_{iter}.png'))
+                
+                # Compute RMSE
+                current_mean_h = np.mean(h_all[:, :ireal+1], axis=1)
+                current_sim = J @ current_mean_h
+                current_rmse = np.sqrt(np.mean((current_sim - y) ** 2))
+                rmse_list.append(current_rmse)    
+                
                 if set(hLold) == set(hL):
+                    ireal += 1
                     # Save realization if converged
                     h_all[:, ireal] = h
-                    plt.subplot(3, 1, 3)
-                    t_h = dt * np.arange(n_h)
-                    plt.plot(t_h, np.mean(h_all[:, :ireal + 1], axis=1), 'r', linewidth=1.5)
-                    plt.xlabel(r'$\tau$ [hr]')
-                    plt.plot(t_h, np.percentile(h_all[:, :ireal + 1], [10, 90], axis=1).T, 'b')
-                    #plt.plot(t_h, [np.min(h_all[:, :ireal + 1], axis=1),
-                    #            np.max(h_all[:, :ireal + 1], axis=1)], 'b:')
-                    plt.legend(['mean', '10%', '90%', 'min', 'max'])
-                    plt.draw()
-                    plt.pause(0.001)
-                    ireal += 1
                     break
 
-        theta_old = theta
+       
+        ax3.plot(t_h, np.mean(h_all[:, :ireal + 1], axis=1), 'r', linewidth=1.5)
+        plt.xlabel(r'$\tau$ [hr]')
+        percentiles = np.percentile(h_all[:, :ireal + 1], [10, 90], axis=1)
+        ax3.plot(t_h, percentiles[0, :], '--b', label="10th Percentile")  # 10th percentile
+        ax3.plot(t_h, percentiles[1, :], '--b', label="90th Percentile")  # 90th percentile
+        ax3.legend(['mean', '10%', '90%', 'min', 'max'])
+        ax3.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+        ax3.tick_params(axis='both', direction='in',top=True,right=True)
+        plt.tight_layout()
+        plt.savefig(os.path.join(sdir, f'realization_{ireal}.png'))
+        plt.close()
+        
+        
+        # Plot RMSE over realizations
+        plt.figure()
+        plt.plot(range(1, len(rmse_list) + 1), rmse_list, '-o')
+        plt.xlabel('Number of Realizations')
+        plt.ylabel('RMSE')
+        plt.title('RMSE vs. Number of Realizations')
+        plt.tight_layout()
+        plt.savefig(os.path.join(sdir, f'rmse_over_realizations_{ireal}.png'))
+        plt.close()
+        
         # Define sumprob function
         def sumprob(lntheta):
             theta = np.exp(lntheta)
@@ -768,7 +852,8 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
                     lnp_i -= (h_i[jj + 1] - h_i[jj]) ** 2 / (4 * theta)
                 lnpsum -= lnp_i
             return lnpsum
-
+            
+        theta_old = theta
         res = fmin(lambda lntheta: sumprob(lntheta), np.log(theta), disp=False)
         theta = np.exp(res[0])
         h = h_be
@@ -786,15 +871,25 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
         theta = max(theta, 2 * int_cov / corr_time)
         n_corr_time = int(np.ceil(corr_time / dt))
 
-        plt.figure(3)
-        plt.plot(dt * np.arange(len(h)), cov, 'o', label='C(s)=<g(t+s)g(t)>')
-        plt.plot(dt * np.arange(n_corr_time),
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.plot(dt * np.arange(len(h)), cov, 'o', label='C(s)=<g(t+s)g(t)>')
+        ax.plot(dt * np.arange(n_corr_time),
                 (theta / (n_corr_time - 1)) * np.arange(n_corr_time - 1, -1, -1), '+-', label='Linear approx.')
-        plt.legend()
-        plt.xlabel('Time lag s (hr)')
-        plt.ylabel('C(s) (1/hr^2)')
-        plt.show()
-
+        ax.legend()
+        ax.set_xlabel('Time lag s (hr)')
+        # ax.set_ylabel('C(s) (1/hr^2)') make C(s) italic and times new roman:
+        ax.set_ylabel(r'$\mathit{C(s)}$ (1/hr$^2$)')
+        ax.set_title('Final estimated autocovariance function')
+        # inside ticks:
+        ax.tick_params(axis='both', direction='in',top=True,right=True)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(rdir, f'{ex_nm}_autocovariance.png'))
+        plt.close()
+        major_while_cnt += 1
+        print(f'End of major while loop, major_while_cnt: {major_while_cnt}')
+        print(f'Current theta: {theta}, convergence if : {abs(theta_old - theta) / theta} < 0.01')
+        
     # Some stats
     trim_time = min(dt * n_h, 16)
     n_trim = min(n_h, 1 + int(np.ceil(trim_time / dt)))
@@ -829,27 +924,30 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
     InvG = (dx / np.sqrt(4 * np.pi * Disp_opt * tplot ** 3)) * np.exp(-(dx - v_opt * tplot) ** 2 / (4 * Disp_opt * tplot))
     InvG[0] = 0
 
-    # Plot final results
-    plt.figure(2)
-    plt.plot(t_h, np.mean(h_all[:, :ireal], axis=1), 'r', label='Mean')
-    plt.xlabel(r'$\tau$ [hr]')
-    plt.ylabel('g(τ) [1/hr]')
-    plt.plot(t_h, np.percentile(h_all[:, :ireal], 10, axis=1), 'b', label='10%')
-    plt.plot(t_h, np.percentile(h_all[:, :ireal], 90, axis=1), 'b', label='90%')
-    plt.axis([0, 24, 0, 1])
-    plt.text(12, 0.5, f'g(t) stats:\nkernel mass: {m_0:.3f}\nmean (hr): {m_1:.3f}\nVar (hr^2): {var_exp:.3f}')
-    plt.legend()
-    plt.show()
+    # Plot the transfer function
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(t_h, np.mean(h_all[:, :ireal + 1], axis=1), 'k', linewidth=1.5)
+    ax.plot(t_h, np.percentile(h_all[:, :ireal], 10, axis=1), '--r')
+    ax.plot(t_h, np.percentile(h_all[:, :ireal], 90, axis=1), '--r', label='10th and 90th percentiles')
+    ax.legend()
+    ax.set_title('Simulated Transfer Function')
+    ax.set_xlabel(r'$\tau$ [hr]')
+    ax.set_ylabel('h [1/hr]')
+    ax.tick_params(axis='both', direction='in',top=True,right=True)
+    txt = f"Kernel stats:\nmass: {np.round(m_0, 5)}\nmean: {np.round(m_1, 5)}\nvariance: {np.round(var_exp, 5)}\nRMSE: {np.round(RMSE, 5)}"
+    ax.set_xlim([0, np.max(t_h)])
+    ax.set_ylim([0, np.max(np.mean(h_all[:, :ireal + 1]+0.5, axis=1))])
+    plt.text(0.01, -.35, txt, fontsize=12, transform=ax.transAxes,
+         bbox=dict(facecolor='lightgray', edgecolor='black', boxstyle='round,pad=0.5'))
 
-    plt.figure(22)
-    plt.semilogy(t_h, np.mean(h_all[:, :ireal], axis=1), 'r', label='Mean')
-    plt.xlabel(r'$\tau$ [hr]')
-    plt.ylabel('g(τ) [1/hr]')
-    plt.plot(t_h, np.percentile(h_all[:, :ireal], 10, axis=1), 'b', label='10%')
-    plt.plot(t_h, np.percentile(h_all[:, :ireal], 90, axis=1), 'b', label='90%')
-    plt.axis([0, 24, 1e-5, 1])
-    plt.legend()
-    plt.show()
+    if fit_ade:
+        txt = f"ADE parameters:\nv (m/hr): {np.round(v, 5)}\nDisp (m^2/hr): {np.round(Disp, 5)}"
+        plt.text(0.51, -.35, txt, fontsize=12, transform=ax.transAxes,
+            bbox=dict(facecolor='lightgray', edgecolor='black', boxstyle='round,pad=0.5'))
+    plt.tight_layout()
+    plt.savefig(os.path.join(rdir, f'{ex_nm}_simulated_transfer_fx.png'))
+
+    
 
 
 
@@ -863,17 +961,36 @@ if __name__ == '__main__':
     deconv(num_dets, time, in_signal, out_signal,fit_ade=True,ex_nm=f'gambill_{prefix}')
     
     # run Gambill with deconv_2:
-    num_dets = {'theta': 35, 'corr_time': 0.1, 'sigma': 0.231, 'sigma_max': 0.4, 'n_h': 128, 'nreal': 50}
-    prefix = 'highQ_R2'
+    num_dets = {'theta': 10, 'corr_time': 0.1, 'sigma': 0.231, 'sigma_max': 0.4, 'n_h': 128, 'nreal': 25}
+    prefix = 'lowQ_R2'
     time, in_signal, out_signal = load_gambill_data(prefix=prefix)
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
     deconv_2(num_dets, time, in_signal, out_signal,fit_ade=True,ex_nm=f'gambill_{prefix}')
+    
+    # run gooseff with deconv_2:
+    num_dets = {'theta': 10**-6, 'corr_time': 0.1, 'sigma': 0.4, 'sigma_max': 0.8, 'n_h': 500, 'nreal': 25}
+    prefix = '1'
+    time, in_signal, out_signal = load_gooseff_data(prefix=prefix)
+    assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
+    deconv_2(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=f'gooseff_{prefix}')
     
     # run chapeau function:
     time, in_signal,out_signal = chapeau()
     num_dets = {'theta': 2, 'corr_time': 8, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
     deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau')
+    
+    # run chapeau function with deconv_2:
+    time, in_signal,out_signal = chapeau()
+    num_dets = {'theta': 2, 'corr_time': 8, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 15}
+    assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
+    deconv_2(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau')
+        
+    # run neu and mars:
+    time, in_signal,out_signal = neu_and_mars()
+    num_dets = {'theta': 2, 'corr_time': 8, 'sigma':10, 'sigma_max': 20, 'n_h': None, 'nreal': 15}
+    assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
+    deconv_2(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars')
     
     # bimodal example:
     time, in_signal,out_signal = bimodal(dt=0.006)
