@@ -9,7 +9,7 @@ import time as tm
 import pandas as pd
 from scipy.stats import norm
 from scipy.optimize import minimize
-%matplotlib widget
+#%matplotlib widget
 
 
 import matplotlib.animation as animation
@@ -18,7 +18,7 @@ import matplotlib.animation as animation
 np.random.seed(int(sum(100 * np.array(list(tm.localtime())))))
 
 # Chapeau function:
-def chapeau(dt=0.1):
+def chapeau(dt=0.1,ex_nm='chapeau'):
     ex_nm = 'chapeau'
     outdir = os.path.join('test_datasets', ex_nm)
     if not os.path.exists(outdir):
@@ -111,7 +111,7 @@ def chapeau(dt=0.1):
     return t_y, x_padded, y_t
 
 
-def neu_and_mars(dt=0.1):
+def neu_and_mars(dt=0.1,ex_nm='neu_and_mars'):
     ex_nm='neu_and_mars'
     outdir = os.path.join('test_datasets', ex_nm)
     if not os.path.exists(outdir):
@@ -213,7 +213,11 @@ def neu_and_mars(dt=0.1):
     return t_y, x_padded, y_t
 
 
-def bimodal(dt=0.006):
+def bimodal(dt=0.006,ex_nm='bimodal'):
+    outdir = os.path.join('test_datasets',ex_nm)
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+        
     # Time vector for x(t) and s(t)
     t_x = np.linspace(0, 3, 500)
 
@@ -281,7 +285,18 @@ def bimodal(dt=0.006):
     x_t_padded = np.pad(x_t, (0, N_y - N_x), 'constant')
     s_t_padded = np.pad(s_t, (0, N_y - N_s), 'constant')
     
-    # Return the signals and time vectors
+    # Return the signals and time vectors and save as csv:
+    df = pd.DataFrame({'time': t_y, 'in': x_t_padded, 'out': y_t, 'known_transfer_fx': s_t_padded})
+    df.to_csv(os.path.join(outdir, f'{ex_nm}_data.csv'), index=False)
+    
+    exdir = os.path.join('examples', ex_nm)
+    if not os.path.exists(exdir):
+        os.makedirs(exdir)
+        os.makedirs(os.path.join(exdir, 'figs'))
+        os.makedirs(os.path.join(exdir, 'data'))
+    df.to_csv(os.path.join(exdir, 'data', f'{ex_nm}_data.csv'), index=False)
+    plt.savefig(os.path.join(exdir, 'figs', f'{ex_nm}_fig.png'))
+    
     return t_y,x_t_padded,y_t
 
 
@@ -949,8 +964,6 @@ def deconv_2(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm=''):
 
     
 
-
-
 if __name__ == '__main__':
     print('Running deconvolution...')
     
@@ -990,7 +1003,7 @@ if __name__ == '__main__':
     time, in_signal,out_signal = neu_and_mars()
     num_dets = {'theta': 2, 'corr_time': 8, 'sigma':10, 'sigma_max': 20, 'n_h': None, 'nreal': 15}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    deconv_2(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars')
+    deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars')
     
     # bimodal example:
     time, in_signal,out_signal = bimodal(dt=0.006)
