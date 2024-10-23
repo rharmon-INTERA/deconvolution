@@ -360,8 +360,7 @@ def deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=''):
     dt = time[1] - time[0]
     
     if n_h is None:
-        max_transfer_time = 8.0  # Maximum expected duration of the transfer function
-        n_h = int(np.ceil(max_transfer_time / dt))
+        n_h = int(np.ceil(corr_time / dt))
     
     corr_time = min(n_h * dt, corr_time)
     n_corr_time = int(np.ceil(corr_time / dt))
@@ -447,14 +446,13 @@ def deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=''):
             hL = np.setdiff1d(hL, hL_rem)
             hL = np.union1d(hL, hL_add)
             nL = len(hL)
-
+            
             if not np.setdiff1d(hL_old, hL).size and not np.setdiff1d(hL, hL_old).size:
                 print('breaking...')
                 break
-
     # Initialize sum of h and sum of h squared
     h_all = np.zeros((n_h, nreal))
-
+  
     # Loop over all realizations
     for ireal in range(nreal):
         # Unconditional realization
@@ -1007,7 +1005,7 @@ if __name__ == '__main__':
     
     # bimodal example:
     time, in_signal,out_signal = bimodal(dt=0.006)
-    num_dets = {'theta': 2, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
+    num_dets = {'theta': 0.1, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
     deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal')
     
