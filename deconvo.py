@@ -2,19 +2,90 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-#%matplotlib widget # uncommment to enable interactive plots (ie., zoom, pan, etc.)
+#%matplotlib widget 
+# uncommment to enable interactive plots (ie., zoom, pan, etc.)
 from IPython.display import display, clear_output
 import scipy.linalg as la
 from scipy.optimize import minimize, fmin
 from scipy.stats import norm
 import time as tm
+import multiprocessing
+from multiprocessing import Pool, cpu_count
 
 # Seed based on the clock
 np.random.seed(int(sum(100 * np.array(list(tm.localtime())))))
 
-def chapeau(dt=0.1,ex_nm='chapeau'):
-    ex_nm = 'chapeau'
-    outdir = os.path.join('test_datasets', ex_nm)
+def run_single_realization(args):
+    """
+    Compute a single realization of the transfer function h.
+    This function runs in parallel processes.
+    """
+    (C, iQ, J, y, sigma, sigma_max, n_h, dt, h_uc, ii) = args
+
+    # Initialization of constraints
+    hL = []
+    nL = 0
+    iter_count = 0
+    max_iter = 50
+
+    # Add measurement error for this realization:
+    me = sigma * np.random.randn(len(y))
+
+    while iter_count < max_iter:
+        iter_count += 1
+        JRJ = J.T @ J / sigma**2
+        u = np.ones(n_h)
+        umat = np.block([[JRJ + iQ, JRJ @ u[:, None]], 
+                         [u.T @ JRJ, u.T @ JRJ @ u[:, None]]])
+        
+        urhs = np.concatenate([J.T @ (y + me) / sigma**2 - JRJ @ h_uc, 
+                               [u.T @ J.T @ (y + me) / sigma**2 - u.T @ JRJ @ h_uc]])
+        
+        # Matrix related to the Lagrange multipliers
+        Lmat = np.zeros((n_h + 1, nL))
+        Lrhs = np.zeros(nL)
+        for j in range(nL):
+            Lmat[hL[j], j] = 1
+            Lmat[n_h, j] = 1
+            Lrhs[j] = -h_uc[hL[j]]
+
+        mat = np.block([[umat, Lmat], 
+                        [Lmat.T, np.zeros((nL, nL))]])
+        rhs = np.concatenate([urhs, Lrhs])
+
+        a = np.diag(mat).copy()
+        a[(n_h + 1):] = 1
+        imat = la.inv(np.diag(1 / a) @ mat) @ np.diag(1 / a)
+        sol = imat @ rhs
+        h = sol[:n_h] + sol[n_h] + h_uc
+        h = h.flatten()
+        h[hL] = 0
+        nu = sol[n_h + 1:].flatten()
+
+        sim = J @ h
+
+        hLold = hL.copy()
+        # Set of entries that need Lagrange multiplier
+        hLadd = ii[h < 0]
+        # Remove entries that don't need a Lagrange multiplier anymore
+        hLrem = [hL[j] for j in range(len(nu)) if nu[j] > 0]
+        hL = [hv for hv in hL if hv not in hLrem]
+        hL = sorted(set(hL) | set(hLadd))
+        nL = len(hL)
+
+        # If no change in hL, we have converged
+        if set(hLold) == set(hL):
+            return h  # Return the computed h for this realization
+
+    # If not converged within max_iter, return what we have
+    return h
+
+
+def chapeau(dt=0.1,ex_nm='chapeau',add_error=True):
+    if add_error:
+        outdir = os.path.join('test_datasets', ex_nm+'_withNoise')
+    else:
+        outdir = os.path.join('test_datasets', ex_nm)
     if not os.path.exists(outdir):
         os.makedirs(outdir)
     
@@ -52,13 +123,29 @@ def chapeau(dt=0.1,ex_nm='chapeau'):
     y_t = J @ s_padded
     # Time values for the convolution result y(t)
     t_y = np.arange(0, n_y * dt, dt)
+    
+    # If adding error:
+    if add_error:
+        # Scale factors for the noise, can be adjusted
+        error_scale_x = 0.025  # noise std is 5% of local value for input
+        error_scale_y = 0.025  # noise std is 5% of local value for output
+
+        # Add noise to x_padded
+        x_noise = np.random.normal(0, np.abs(x_padded) * error_scale_x)
+        x_padded = x_padded + x_noise
+        x_padded = np.where(x_padded < 0, 0, x_padded)
+
+        # Add noise to y_t
+        y_noise = np.random.normal(0, np.abs(y_t) * error_scale_y)
+        y_t = y_t + y_noise
+        y_t = np.where(y_t < 0, 0, y_t)
 
     # Generate figures:
     fig, [ax1, ax3] = plt.subplots(2, 1, figsize=(10, 6))
-    ax1.plot(t_x, x_t, 'b',label='x(t)')
+    ax1.plot(t_y, x_padded, 'b',label='x(t)') # input signal
     ax2 = ax1.twinx()
-    ax2.plot(t_s, s_t, '-.g',label='h(t)')
-    ax3.plot(t_y, y_t, 'k',label='C(t)')
+    ax2.plot(t_s, s_t, '-.g',label='h(t)') # transfer function
+    ax3.plot(t_y, y_t, 'k',label='C(t)') # convolution result
     
     # formatting:
     ax1.set_ylabel('I(t)')
@@ -71,9 +158,12 @@ def chapeau(dt=0.1,ex_nm='chapeau'):
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines + lines2, labels + labels2, loc='upper right')
-    
-    ax1.set_title('Input Signal h(t) and Transfer Function s(t)')
-    ax3.set_title('Convolution Result C(t) = I(t) * h(t)')
+    if add_error:
+        ax1.set_title('Input Signal I(t) with Noise and Known Transfer Function h(t) ')
+        ax3.set_title('Convolution Result C(t) = I(t) * h(t) with Noise')
+    else:
+        ax1.set_title('Input Signal h(t) and Transfer Function s(t)')
+        ax3.set_title('Convolution Result C(t) = I(t) * h(t)')
     
     ax1.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
     ax2.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
@@ -94,7 +184,11 @@ def chapeau(dt=0.1,ex_nm='chapeau'):
     df = pd.DataFrame({'time': t_y, 'in': x_padded, 'out': y_t, 'known_transfer_fx': s_padded})
     df.to_csv(os.path.join(outdir, f'{ex_nm}_data.csv'), index=False)
     
-    exdir = os.path.join('examples', ex_nm)
+    
+    if add_error:
+        exdir = os.path.join('examples', ex_nm+'_withNoise')
+    else:
+        exdir = os.path.join('examples', ex_nm)
     if not os.path.exists(exdir):
         os.makedirs(exdir)
         os.makedirs(os.path.join(exdir, 'data'))
@@ -104,8 +198,11 @@ def chapeau(dt=0.1,ex_nm='chapeau'):
     return t_y, x_padded, y_t
 
 
-def gamma(dt=0.1, ex_nm='gamma'):
-    outdir = os.path.join('test_datasets', ex_nm)
+def gamma(dt=0.1, ex_nm='gamma',add_error=False):
+    if add_error:
+        outdir = os.path.join('test_datasets', ex_nm+'_withNoise')
+    else:
+        outdir = os.path.join('test_datasets', ex_nm)
     if not os.path.exists(outdir):
         os.makedirs(outdir)
     
@@ -147,13 +244,35 @@ def gamma(dt=0.1, ex_nm='gamma'):
     y_t = J @ s_padded
     # Time values for the convolution result y(t)
     t_y = np.arange(0, n_y * dt, dt)
+    y_t_no_noise = y_t.copy()
+    
+    # If adding error:
+    if add_error:
+        # Scale factors for the noise, can be adjusted
+        error_scale_x = 0.05  # noise std is 5% of local value for input
+        error_scale_y = 0.05  # noise std is 5% of local value for output
+
+        # Add noise to x_padded
+        x_noise = np.random.normal(0, np.abs(x_padded) * error_scale_x)
+        x_padded = x_padded + x_noise
+        x_padded = np.where(x_padded < 0, 0, x_padded)
+
+        # Add noise to y_t
+        y_noise = np.random.normal(0, np.abs(y_t) * error_scale_y)
+        y_t = y_t + y_noise
+        y_t = np.where(y_t < 0, 0, y_t)
     
     # Generate figures:
     fig, [ax1, ax3] = plt.subplots(2, 1, figsize=(10, 6))
     ax1.plot(t_x, x_t, 'b', label='I(t)')
+    if add_error:
+        ax1.plot(t_y, x_padded, '.b', label='I(t) with noise', alpha=0.5)
     ax2 = ax1.twinx()
     ax2.plot(t_s, s_t, '-.g', label='h(t)')
-    ax3.plot(t_y, y_t, 'k', label='C(t)')
+    
+    ax3.plot(t_y, y_t_no_noise, 'k', label='C(t)')
+    if add_error:
+        ax3.plot(t_y, y_t, '.k', label='C(t) with noise', alpha=0.5)
     
     # Formatting:
     ax1.set_ylabel('I(t)')
@@ -166,7 +285,7 @@ def gamma(dt=0.1, ex_nm='gamma'):
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines + lines2, labels + labels2, loc='upper right')
-    
+    ax3.legend(loc='upper right')
     ax1.set_title('Input Signal I(t) and Transfer Function h(t)')
     ax3.set_title('Convolution Result C(t) = I(t) * h(t)')
     
@@ -189,7 +308,10 @@ def gamma(dt=0.1, ex_nm='gamma'):
     df = pd.DataFrame({'time': t_y, 'in': x_padded, 'out': y_t, 'known_transfer_fx': s_padded})
     df.to_csv(os.path.join(outdir, f'{ex_nm}_data.csv'), index=False)
     
-    exdir = os.path.join('examples', ex_nm)
+    if add_error:
+        exdir = os.path.join('examples', ex_nm+'_withNoise')
+    else:
+        exdir = os.path.join('examples', ex_nm)
     if not os.path.exists(exdir):
         os.makedirs(exdir)
         os.makedirs(os.path.join(exdir, 'data'))
@@ -199,9 +321,11 @@ def gamma(dt=0.1, ex_nm='gamma'):
     return t_y, x_padded, y_t
 
 
-def neu_and_mars(dt=0.1,ex_nm='neu_and_mars'):
-    ex_nm='neu_and_mars'
-    outdir = os.path.join('test_datasets', ex_nm)
+def neu_and_mars(dt=0.1,ex_nm='neu_and_mars',add_error=False):
+    if add_error:
+        outdir = os.path.join('test_datasets', ex_nm+'_withNoise')
+    else:
+        outdir = os.path.join('test_datasets', ex_nm)
     if not os.path.exists(outdir):
         os.makedirs(outdir)
     # Neuman and de Marsily (176) example:
@@ -251,62 +375,94 @@ def neu_and_mars(dt=0.1,ex_nm='neu_and_mars'):
     y_t = J @ s_padded
     # Time values for the convolution result y(t)
     t_y = np.arange(0, n_y * dt, dt)
+    y_t_no_noise = y_t.copy()
     
+    # If adding error:
+    if add_error:
+        # Scale factors for the noise, can be adjusted
+        error_scale_x = 0.05  # noise std is 5% of local value for input
+        error_scale_y = 0.05  # noise std is 5% of local value for output
 
-    # Plot the input signal x(t)
-    plt.figure(figsize=(10, 6))
+        # Add noise to x_padded
+        x_noise = np.random.normal(0, np.abs(x_padded) * error_scale_x)
+        x_padded = x_padded + x_noise
+        x_padded = np.where(x_padded < 0, 0, x_padded)
 
-    plt.subplot(3, 1, 1)
-    plt.plot(t_x, x_t, label='Input Signal x(t)', color='blue')
-    plt.title('Input Signal x(t)')
-    plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
-    plt.grid(True)
-    plt.legend()
-
-    # Plot the transfer function s(t)
-    plt.subplot(3, 1, 2)
-    plt.plot(t_s, s_t, label='Transfer Function s(t)', color='orange')
-    plt.title('Transfer Function s(t)')
-    plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
-    plt.grid(True)
-    plt.legend()
-
-    # Plot the convolution result
-    plt.subplot(3, 1, 3)
-    plt.plot(t_y, y_t, label='Convolution of x(t) and s(t)', color='green')
-    plt.title('Convolution Result (x(t) * s(t))')
-    plt.xlim(0, 9)  # Set x-axis limits to 0 to 9 for consistency
-    plt.grid(True)
-    plt.legend()
-
+        # Add noise to y_t
+        y_noise = np.random.normal(0, np.abs(y_t) * error_scale_y)
+        y_t = y_t + y_noise
+        y_t = np.where(y_t < 0, 0, y_t)
+    
+    # Generate figures:
+    fig, [ax1, ax3] = plt.subplots(2, 1, figsize=(10, 6))
+    ax1.plot(t_x, x_t, 'b', label='I(t)')
+    if add_error:
+        ax1.plot(t_y, x_padded, '.b', label='I(t) with noise', alpha=0.5)
+    ax2 = ax1.twinx()
+    ax2.plot(t_s, s_t, '-.g', label='h(t)')
+    
+    ax3.plot(t_y, y_t_no_noise, 'k', label='C(t)')
+    if add_error:
+        ax3.plot(t_y, y_t, '.k', label='C(t) with noise', alpha=0.5)
+    
+    # Formatting:
+    ax1.set_ylabel('I(t)')
+    ax2.set_ylabel('h(t)')
+    ax3.set_ylabel('C(t)')
+    
+    plt.rcParams['font.family'] = 'Times New Roman'
+    plt.rcParams['font.size'] = 12
+    # Combined legend:
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+    ax3.legend(loc='upper right')
+    ax1.set_title('Input Signal I(t) and Transfer Function h(t)')
+    ax3.set_title('Convolution Result C(t) = I(t) * h(t)')
+    
+    ax1.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+    ax2.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+    ax3.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+    
+    # Inside ticks:
+    ax1.tick_params(axis='both', direction='in')
+    ax2.tick_params(axis='both', direction='in')
+    ax3.tick_params(axis='both', direction='in')
+    
+    ax1.set_xlim(0, t_y[-1])
+    ax3.set_xlim(0, t_y[-1])
+    
+    ax3.set_xlabel('Time')
     plt.tight_layout()
-    plt.show()
     
     df = pd.DataFrame({'time': t_y, 'in': x_padded, 'out': y_t, 'known_transfer_fx': s_padded})
     df.to_csv(os.path.join(outdir, f'{ex_nm}_data.csv'), index=False)
     
-    exdir = os.path.join('examples', ex_nm)
+    if add_error:
+        exdir = os.path.join('examples', ex_nm+'_withNoise')
+    else:
+        exdir = os.path.join('examples', ex_nm)
     if not os.path.exists(exdir):
         os.makedirs(exdir)
         os.makedirs(os.path.join(exdir, 'data'))
     df.to_csv(os.path.join(exdir, 'data', f'{ex_nm}_data.csv'), index=False)
     plt.savefig(os.path.join(exdir, 'data', f'{ex_nm}_fig.png'))
 
-    # make x(t) same length as t_conv
-    #temp = np.zeros(len(t_conv))
-    #temp[:len(x_t)] = x_t
-    #x_t = temp
-    
     return t_y, x_padded, y_t
 
 
-def bimodal(dt=0.006,ex_nm='bimodal'):
-    outdir = os.path.join('test_datasets',ex_nm)
+def bimodal(dt=0.006, ex_nm='bimodal', add_error=False):
+    if add_error:
+        outdir = os.path.join('test_datasets', ex_nm + '_withNoise')
+    else:
+        outdir = os.path.join('test_datasets', ex_nm)
     if not os.path.exists(outdir):
         os.makedirs(outdir)
         
     # Time vector for x(t) and s(t)
-    t_x = np.linspace(0, 3, 500)
+    # Using 500 points from 0 to 3
+    t_x = np.linspace(0, 3, 150)
+    t_s = t_x.copy()  # s(t) defined over the same interval
 
     # Parameters for x(t)
     mean_val = 1.5
@@ -323,7 +479,7 @@ def bimodal(dt=0.006,ex_nm='bimodal'):
     sd_val_2 = 0.2
 
     # Compute s(t) as the sum of two normal distributions
-    s_t = norm.pdf(t_x, mean_val_1, sd_val_1) + (norm.pdf(t_x, mean_val_2, sd_val_2) / 2)
+    s_t = norm.pdf(t_s, mean_val_1, sd_val_1) + (norm.pdf(t_s, mean_val_2, sd_val_2) / 2)
 
     # Time increment
     dt = t_x[1] - t_x[0]
@@ -343,47 +499,109 @@ def bimodal(dt=0.006,ex_nm='bimodal'):
 
     # Time vector for y_t
     t_y = np.arange(len(y_t)) * dt
+    y_t_no_noise = y_t.copy()
 
-    # Plot the signals for visualization
-    plt.figure(figsize=(12, 8))
-
-    plt.subplot(3, 1, 1)
-    plt.plot(t_x, x_t)
-    plt.title('Input Signal x(t)')
-    plt.xlabel('Time')
-    plt.ylabel('Amplitude')
-
-    plt.subplot(3, 1, 2)
-    plt.plot(t_x, s_t)
-    plt.title('Transfer Function s(t)')
-    plt.xlabel('Time')
-    plt.ylabel('Amplitude')
-
-    plt.subplot(3, 1, 3)
-    plt.plot(t_y, y_t)
-    plt.title('Output Signal y(t) = x(t) * s(t)')
-    plt.xlabel('Time')
-    plt.ylabel('Amplitude')
-
-    plt.tight_layout()
-    plt.show()
-
-    # pad x(t) and s(t) to match the length of the convolution result
+    # Pad x(t) and s(t) to match the length of the convolution result (for saving/plotting)
     x_t_padded = np.pad(x_t, (0, N_y - N_x), 'constant')
     s_t_padded = np.pad(s_t, (0, N_y - N_s), 'constant')
-    
-    # Return the signals and time vectors and save as csv:
+
+    if add_error:
+        # Scale factors for the noise
+        error_scale_x = 0.05  # 5% of local value for input
+        error_scale_y = 0.05  # 5% of local value for output
+
+        # Add noise to the input before padding
+        x_noise = np.random.normal(0, np.abs(x_t) * error_scale_x)
+        x_t_noisy = x_t + x_noise
+        x_t_noisy = np.where(x_t_noisy < 0, 0, x_t_noisy)
+
+        # Reconstruct J with noisy input
+        J_noisy = np.zeros((N_y, N_s))
+        for i in range(N_s):
+            J_noisy[i:i+N_x, i] = x_t_noisy
+
+        # Convolution with noisy input
+        y_t_noisy = J_noisy @ s_t * dt
+
+        # Add noise to the output
+        y_noise = np.random.normal(0, np.abs(y_t_noisy) * error_scale_y)
+        y_t_noisy = y_t_noisy + y_noise
+        y_t_noisy = np.where(y_t_noisy < 0, 0, y_t_noisy)
+
+        # Update x_t_padded and y_t with noisy values
+        x_t_padded = np.pad(x_t_noisy, (0, N_y - N_x), 'constant')
+        y_t = y_t_noisy
+
+    # Generate figures:
+    fig, [ax1, ax3] = plt.subplots(2, 1, figsize=(10, 6))
+
+    # Plot original input
+    ax1.plot(t_x, x_t, 'b', label='I(t)')
+
+    # Plot noisy input if add_error
+    if add_error:
+        ax1.plot(t_y, x_t_padded, '.b', label='I(t) with noise', alpha=0.5)
+
+    # Plot s(t)
+    ax2 = ax1.twinx()
+    ax2.plot(t_s, s_t, '-.g', label='h(t)')
+
+    # Plot original output
+    ax3.plot(t_y, y_t_no_noise, 'k', label='C(t)')
+
+    # Plot noisy output if add_error
+    if add_error:
+        ax3.plot(t_y, y_t, '.k', label='C(t) with noise', alpha=0.5)
+
+    # Formatting:
+    ax1.set_ylabel('I(t)')
+    ax2.set_ylabel('h(t)')
+    ax3.set_ylabel('C(t)')
+
+    plt.rcParams['font.family'] = 'Times New Roman'
+    plt.rcParams['font.size'] = 12
+
+    # Combined legend:
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+    ax3.legend(loc='upper right')
+
+    ax1.set_title('Input Signal I(t) and Transfer Function h(t)')
+    ax3.set_title('Convolution Result C(t) = I(t) * h(t)')
+
+    ax1.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+    ax2.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+    ax3.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+
+    # Inside ticks:
+    ax1.tick_params(axis='both', direction='in')
+    ax2.tick_params(axis='both', direction='in')
+    ax3.tick_params(axis='both', direction='in')
+
+    ax1.set_xlim(0, t_y[-1])
+    ax3.set_xlim(0, t_y[-1])
+
+    ax3.set_xlabel('Time')
+    plt.tight_layout()
+
+    # Save results to CSV
     df = pd.DataFrame({'time': t_y, 'in': x_t_padded, 'out': y_t, 'known_transfer_fx': s_t_padded})
     df.to_csv(os.path.join(outdir, f'{ex_nm}_data.csv'), index=False)
-    
-    exdir = os.path.join('examples', ex_nm)
+
+    if add_error:
+        exdir = os.path.join('examples', ex_nm+'_withNoise')
+    else:
+        exdir = os.path.join('examples', ex_nm)
+
     if not os.path.exists(exdir):
         os.makedirs(exdir)
         os.makedirs(os.path.join(exdir, 'data'))
+
     df.to_csv(os.path.join(exdir, 'data', f'{ex_nm}_data.csv'), index=False)
     plt.savefig(os.path.join(exdir, 'data', f'{ex_nm}_fig.png'))
-    
-    return t_y,x_t_padded,y_t
+
+    return t_y, x_t_padded, y_t
 
 
 def load_gooseff_data(ws=os.path.join('test_datasets','gooseff'),prefix='1'):
@@ -422,7 +640,7 @@ def load_gambill_data(ws=os.path.join('test_datasets','gambill','data'),prefix='
     return time, in_signal, out_signal
 
 
-def deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='',method=''):
+def deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='',method='',add_error=False):
     # elapsed time:
     start_time = tm.time()
     
@@ -434,9 +652,12 @@ def deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='',method=''
     nreal = num_dets['nreal'] # number of realizations
     n_h = num_dets['n_h'] # Length of transfer-function vector (dt remains the same)
 
-
-    rdir = os.path.join('examples',ex_nm,'results')
-    fdir = os.path.join(rdir,'figs')
+    if add_error:
+        rdir = os.path.join('examples',ex_nm + '_withNoise','results')
+        fdir = os.path.join(rdir,'figs')
+    else:
+        rdir = os.path.join('examples',ex_nm,'results')
+        fdir = os.path.join(rdir,'figs')        
     if not os.path.exists(rdir):
         os.makedirs(rdir)
     if not os.path.exists(fdir):
@@ -450,7 +671,6 @@ def deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='',method=''
 
     # Time increment
     dt = t[1] - t[0]
-
     if n_h is None:
         n_h = int(np.ceil(corr_time / dt))
     
@@ -494,7 +714,8 @@ def deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='',method=''
         hL = []
         nL = 0
         iter = 0
-        while iter < 40:
+       
+        while iter < 50:
             iter += 1
             # Construction of unconstrained matrix
             JRJ = J.T @ J / sigma**2
@@ -807,7 +1028,274 @@ def deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='',method=''
     return df, df_stats#, df_cov
 
 
-def rmse_latex_table(exp_dict):
+def deconv_parallel(num_dets, time, in_signal, out_signal, fit_ade=False, ex_nm='', method='', add_error=False):
+    # elapsed time:
+    start_time = tm.time()
+
+    # Numerical details
+    theta = num_dets['theta'] # A first guess applied linearly to corr_time
+    corr_time = num_dets['corr_time'] # Only applies if less than the total h(t) length
+    sigma = num_dets['sigma'] # std dev of noise
+    sigma_max = num_dets['sigma_max'] # Places a forced maximum on iterated sigma
+    nreal = num_dets['nreal'] # number of realizations
+    n_h = num_dets['n_h'] # Length of transfer-function vector (dt remains the same)
+
+    if add_error:
+        rdir = os.path.join('examples',ex_nm + '_withNoise','results')
+        fdir = os.path.join(rdir,'figs')
+    else:
+        rdir = os.path.join('examples',ex_nm,'results')
+        fdir = os.path.join(rdir,'figs')        
+    if not os.path.exists(rdir):
+        os.makedirs(rdir)
+    if not os.path.exists(fdir):
+        os.makedirs(fdir)
+
+    np.random.seed()   # Initialize random seed
+
+    x = in_signal.copy()
+    y = out_signal.copy()
+    t = time.copy()
+
+    # Time increment
+    dt = t[1] - t[0]
+    if n_h is None:
+        n_h = int(np.ceil(corr_time / dt))
+    
+    corr_time = min(n_h * dt, corr_time)  # Adjust corr_time
+    n_corr_time = int(np.ceil(corr_time / dt))
+    
+    # Initial covariance (first guess)
+    cov = np.zeros(n_h)
+    cov[:n_corr_time] = (theta / n_corr_time) * np.arange(n_corr_time, 0, -1)
+
+    # Construction of Jacobian (convolution matrix)
+    co = dt * x
+    r = dt * np.zeros(n_h)
+    J = la.toeplitz(co, r)
+
+    theta_old = 0
+    while abs(theta_old - theta) / theta > 0.01:
+        
+        # Covariance matrix construction methods:
+        if method == 'olaf':
+            co = np.arange(n_h, 0, -1) * dt * theta  # Olaf's method
+        elif method == 'linprox':
+            co = np.zeros(n_h) # linear approx of cov function
+            co[:n_corr_time] = np.arange(n_corr_time, 0, -1) * dt * theta
+        elif method == 'actcov':
+            co = cov.copy()  # actual cov function
+        else:
+            assert False, 'Please provide a valid method for covariance matrix construction.\n' \
+                            '\t\tValid methods are: "olaf", "linprox", "actcov"'
+        
+        # Construction of generalized covariance matrix
+        c = co.copy()
+        Q = la.toeplitz(c)
+        C = la.cholesky(Q)
+        iQ = la.inv(Q)
+
+        # Vector of indices
+        ii = np.arange(0, n_h)
+
+        # Best estimate (without realizations)
+        # Solve unconstrained system and adjust sigma until stable:
+        iter = 0
+        hL = []
+        nL = 0
+        while iter < 70:
+            iter += 1
+            JRJ = J.T @ J / sigma**2
+            u = np.ones((n_h, 1))
+            umat = np.block([[JRJ + iQ, JRJ @ u], [u.T @ JRJ, u.T @ JRJ @ u]])
+            urhs = np.concatenate([J.T @ y / sigma**2, u.T @ J.T @ y / sigma**2])
+
+            Lmat = np.zeros((n_h + 1, nL))
+            Lrhs = np.zeros(nL)
+            for j in range(nL):
+                Lmat[hL[j], j] = 1
+                Lmat[n_h, j] = 1
+                Lrhs[j] = 0
+
+            mat = np.block([[umat, Lmat], [Lmat.T, np.zeros((nL, nL))]])
+            rhs = np.concatenate([urhs, Lrhs])
+
+            a = np.diag(mat).copy()
+            a[(n_h + 1):] = 1
+            imat = la.inv(np.diag(1 / a) @ mat) @ np.diag(1 / a)
+            sol = imat @ rhs
+            h_be = sol[:n_h] + sol[n_h]
+            h_be = h_be.flatten()
+            h_be[hL] = 0
+            nu = sol[n_h + 1 : n_h + 1 + nL].flatten()
+
+            sim = J @ h_be
+            sigma = np.sqrt(((y - sim).T @ (y - sim)) / (len(y) - n_h + nL - 1))
+            sigma = min(sigma, sigma_max)
+            hLold = hL.copy()
+            # Set of entries that need Lagrange multiplier
+            hLadd = ii[h_be < 0]
+            # Remove entries that don't need a Lagrange multiplier anymore
+            hLrem = [hL[i] for i in range(len(nu)) if nu[i] > 0]
+            hL = [h for h in hL if h not in hLrem]
+            hL = sorted(set(hL) | set(hLadd))
+            nL = len(hL)
+            if not np.setdiff1d(hLold, hL).size and not np.setdiff1d(hL, hLold).size:
+                break
+
+        # Parallel computation of realizations
+        h_all = np.zeros((n_h, nreal))
+
+        # Prepare arguments for parallel runs
+        realizations_args = []
+        for _ in range(nreal):
+            h_uc = C.T @ np.random.randn(n_h)  # unconditional realization
+            # We'll add measurement error inside run_single_realization
+            args = (C, iQ, J, y, sigma, sigma_max, n_h, dt, h_uc, ii)
+            realizations_args.append(args)
+
+        # Run in parallel
+        with Pool(cpu_num) as p:
+            results = p.map(run_single_realization, realizations_args)
+
+        for i, h_res in enumerate(results):
+            h_all[:, i] = h_res
+
+        # Estimate theta:
+        def sumprob(lntheta):
+            theta_test = np.exp(lntheta)
+            lnpsum = 0
+            for i in range(nreal):
+                h_i = h_all[:, i]
+                nnz = np.sum(h_i > 0)
+                ng = len(h_i)
+                # from code: lnp_i etc.
+                lnp_i = -nnz / 2 * np.log(4 * np.pi * theta_test) - (ng - 1) / 2 * np.log(1)
+                for jj in range(ng - 1):
+                    lnp_i -= (h_i[jj + 1] - h_i[jj]) ** 2 / (4 * theta_test)
+                lnpsum -= lnp_i
+            return lnpsum
+
+        theta_old = theta
+        res = fmin(lambda lntheta: sumprob(lntheta), np.log(theta), disp=False)
+        theta = np.exp(res[0])
+        h = h_be
+
+        if method != 'olaf':
+            h_mean = np.mean(h_all, axis=1)
+            mean_vector = h_mean.flatten()
+            zeros_vector = np.zeros_like(h) 
+            h_mean_concat = np.concatenate((mean_vector, zeros_vector), axis=0)
+            
+            h_fft = np.fft.fft(h_mean_concat)
+            cov = (1 / len(h)) * np.fft.ifft(h_fft * np.conj(h_fft))
+            cov = np.real(cov[:len(h)])
+            cov = np.maximum(0, cov)
+            int_cov = dt * np.sum(cov)
+            cov = (int_cov / (dt * np.sum(cov))) * cov
+            theta = cov[0]
+            corr_time = min(n_h * dt, 2 * int_cov / theta)
+            theta = max(theta, 2 * int_cov / corr_time)
+            n_corr_time = int(np.ceil(corr_time / dt))
+        
+            fig_cov, ax_cov = plt.subplots(figsize=(8, 6))
+            ax_cov.plot(dt * np.arange(len(h)), cov, 'o', label='C(s)=<g(t+s)g(t)>')
+            ax_cov.plot(dt * np.arange(n_corr_time),
+                        (theta / (n_corr_time - 1)) * np.arange(n_corr_time - 1, -1, -1), '+-', label='Linear approx.')
+            ax_cov.legend()
+            ax_cov.set_xlabel('Time lag s (hr)')
+            ax_cov.set_ylabel(r'$\mathit{C(s)}$ (1/hr$^2$)')
+            ax_cov.set_title(f'Final estimated autocovariance function - Method: {method.title()}')
+            ax_cov.tick_params(axis='both', direction='in',top=True,right=True)
+        else:
+            h_mean = np.mean(h_all, axis=1)
+            mean_vector = h_mean.flatten()
+            zeros_vector = np.zeros_like(h) 
+            h_mean_concat = np.concatenate((mean_vector, zeros_vector), axis=0)
+            
+            fig_cov, ax_cov = plt.subplots(figsize=(8, 6))
+            olaf = np.arange(n_h, 0, -1) * dt * theta  # Olaf's method
+            ax_cov.plot(dt * np.arange(len(h)), olaf, '+-', label='Olaf method')
+            ax_cov.legend()
+            ax_cov.set_xlabel('Time lag s (hr)')
+            ax_cov.set_ylabel(r'$\mathit{C(s)}$ (1/hr$^2$)')
+            ax_cov.set_title(f'Final estimated autocovariance function - Method: {method.title()}')
+            ax_cov.tick_params(axis='both', direction='in',top=True,right=True)     
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(fdir, f'{ex_nm}_autocovariance.png'))
+        print(f'Current theta: {theta}, convergence if : {abs(theta_old - theta) / theta} < 0.01')
+
+    # Some stats
+    trim_time = min(dt * n_h, 30)
+    n_trim = min(n_h, 1 + int(np.ceil(trim_time / dt)))
+    h_trim = h_mean[:n_trim]
+    time_trim = dt * np.arange(len(h_trim))
+    time_trim[0] = 1e-10
+    m_0 = dt * np.sum(h_trim)
+    m_1 = (dt / m_0) * np.sum(time_trim * h_trim)
+    var_exp = (dt / m_0) * np.sum(((time_trim - m_1) ** 2) * h_trim)
+    RMSE = np.sqrt(np.mean((J @ h - y) ** 2))
+
+    # Plot the transfer function
+    t_h = dt * np.arange(n_h)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(t_h, np.mean(h_all, axis=1), 'k', linewidth=1.5)
+    ax.plot(t_h, np.percentile(h_all, 10, axis=1), '--r')
+    ax.plot(t_h, np.percentile(h_all, 90, axis=1), '--r', label='10th and 90th percentiles')
+    ax.legend()
+    ax.set_title('Simulated Transfer Function')
+    ax.set_xlabel(r'$\tau$ [hr]')
+    ax.set_ylabel('h [1/hr]')
+    ax.tick_params(axis='both', direction='in',top=True,right=True)
+    txt = f"Kernel stats:\nmass: {np.round(m_0, 5)}\nmean: {np.round(m_1, 5)}\nvariance: {np.round(var_exp, 5)}\nRMSE: {np.round(RMSE, 5)}"
+    ax.set_xlim([0, np.max(t_h)])
+    ax.set_ylim([0, np.max(np.mean(h_all, axis=1)+0.5)])
+    plt.text(0.01, -.35, txt, fontsize=12, transform=ax.transAxes,
+         bbox=dict(facecolor='lightgray', edgecolor='black', boxstyle='round,pad=0.5'))
+
+    if fit_ade:
+        # Some reach details
+        dx = 35  # m downstream (only needed for ADE)
+        time_inv = np.linspace(0, (n_trim - 1) * dt, 1000)
+        time_inv[0] = 1e-10
+        h_inv = np.interp(time_inv, time_trim, h_trim)
+        v = dx / m_1  # m/hr
+        Disp = var_exp * v ** 3 / dx / 2  # m^2/hr
+
+        def obj_func(params):
+            V, D = params
+            fun = (dx / np.sqrt(4 * np.pi * D * time_inv ** 3)) * np.exp(-(dx - V * time_inv) ** 2 / (4 * D * time_inv))
+            return np.sum((fun - h_inv) ** 2)
+
+        res = minimize(obj_func, [v, Disp], bounds=[(0, None), (0, None)])
+        v_opt, Disp_opt = res.x
+
+        tplot = np.linspace(0, 1, 500)
+        dt_plot = tplot[1] - tplot[0]
+        InvG = (dx / np.sqrt(4 * np.pi * Disp_opt * tplot ** 3)) * np.exp(-(dx - v_opt * tplot) ** 2 / (4 * Disp_opt * tplot))
+        InvG[0] = 0
+        txt = f"ADE parameters:\nv (m/hr): {np.round(v, 5)}\nDisp (m^2/hr): {np.round(Disp, 5)}"
+        plt.text(0.51, -.35, txt, fontsize=12, transform=ax.transAxes,
+            bbox=dict(facecolor='lightgray', edgecolor='black', boxstyle='round,pad=0.5'))
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(fdir, f'{ex_nm}_simulated_transfer_fx.png'))
+
+    # save results to csv:
+    pct10 = np.percentile(h_all, 10, axis=1)
+    pct90 = np.percentile(h_all, 90, axis=1)
+
+    df = pd.DataFrame({'time': t_h, 'transfer_fx': np.mean(h_all, axis=1), '10th_pct': pct10, '90th_pct': pct90})
+    df_stats = pd.DataFrame({'mass': [m_0], 'mean': [m_1], 'variance': [var_exp], 'RMSE': [RMSE]})
+    
+    df.to_csv(os.path.join(rdir, f'{ex_nm}_transfer_fx.csv'), index=False)
+    df_stats.to_csv(os.path.join(rdir, f'{ex_nm}_stats.csv'), index=False)
+
+    return df, df_stats
+
+
+def rmse_latex_table(exp_dict,fn_out='rmse_methods_table.tex'):
     # build dataframe of all RMSE values:
     data_stor = pd.DataFrame(data=None, columns=['Example Type','RMSE','Method'])
     for key in exp_dict.keys():
@@ -848,81 +1336,146 @@ def rmse_latex_table(exp_dict):
 
     outdir = os.path.join('examples')
     # Optionally, write the LaTeX table to a .tex file
-    with open(os.path.join(outdir,'rmse_methods_table.tex'), 'w') as f:
+    with open(os.path.join(outdir,fn_out), 'w') as f:
         f.write(latex_table)
     
 
 if __name__ == '__main__':
     print('Running deconvolution...')
     
+    cpu_num = None # number of cpus to use in parallel processing, set to what you have available, otherwise it will use all available cpus
+    if cpu_num is None:
+        cpu_num = cpu_count()
+    
+    add_error = False
     # -----------------------------------------------------------------------------------------------
     # RUN EXPERIMENTAL EXAMPLES:
     #--------------------------------------------------------------
     exp_dict = {} # save results into dict
     
     # run chapeau function:
-    time, in_signal,out_signal = chapeau()
-    num_dets = {'theta': 2, 'corr_time': 9, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
+    print('Running chapeau example...')
+    time, in_signal,out_signal = chapeau(add_error=add_error)
+    num_dets = {'theta': 2, 'corr_time': 9, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 24}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='actcov')
+    
+    print('Method: Actual Covariance')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='actcov',add_error=add_error)
+    else:
+        # run in parallel, for nreal >= 20, single core is faster than parallel for under 20 realizations because time it takes to
+        # set up parallel processing is longer than the time it takes to run the deconvolution for 20 realizations.
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='actcov',add_error=add_error)    
     exp_dict['chapeau_actcov'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='olaf')
+    print('Method: Cirpka et al. 2007')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='olaf')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='olaf')
     exp_dict['chapeau_olaf'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='linprox')
+    print('Method: Linear Approximation')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='linprox')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='chapeau',method='linprox')
     exp_dict['chapeau_linprox'] = {'tf': tf, 'stats': stats}
     
+    
     # run gamma function:
-    time, in_signal,out_signal = gamma()
-    num_dets = {'theta': 0.1, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
+    print('Running gamma example...')
+    time, in_signal,out_signal = gamma(add_error=add_error)
+    num_dets = {'theta': 0.1, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 24}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='actcov')
+    print('Method: Actual Covariance')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='actcov',add_error=add_error)
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='actcov',add_error=add_error)
     exp_dict['gamma_actcov'] = {'tf': tf, 'stats': stats}
-    #tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='olaf') # fails to converge
-    #exp_dict['gamma_olaf'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='linprox')
+    print('Method: Cirpka et al. 2007')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='olaf') # fails to converge
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='olaf')
+    exp_dict['gamma_olaf'] = {'tf': tf, 'stats': stats}
+    print('Method: Linear Approximation')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='linprox')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='gamma',method='linprox')
     exp_dict['gamma_linprox'] = {'tf': tf, 'stats': stats}
     
     # run neu and mars:
-    time, in_signal,out_signal = neu_and_mars()
-    num_dets = {'theta': 2, 'corr_time': 8, 'sigma':10, 'sigma_max': 20, 'n_h': None, 'nreal': 15}
+    print('Running neu and mars example...')
+    time, in_signal,out_signal = neu_and_mars(add_error=add_error)
+    num_dets = {'theta': 2, 'corr_time': 8, 'sigma':10, 'sigma_max': 20, 'n_h': None, 'nreal': 24}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    tf, stats =deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='actcov')
+    print('Method: Actual Covariance')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='actcov',add_error=add_error)
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='actcov',add_error=add_error)
     exp_dict['neu_and_mars_actcov'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='olaf')
+    print('Method: Cirpka et al. 2007')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='olaf')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='olaf')
     exp_dict['neu_and_mars_olaf'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='linprox')
+    print('Method: Linear Approximation')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='linprox')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='neu_and_mars',method='linprox')
     exp_dict['neu_and_mars_linprox'] = {'tf': tf, 'stats': stats}
     
     # bimodal example:
-    time, in_signal,out_signal = bimodal(dt=0.006)
-    num_dets = {'theta': 0.1, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 10}
+    print('Running bimodal example...')
+    time, in_signal,out_signal = bimodal(dt=0.1,add_error=add_error)#bimodal(dt=0.006)
+    num_dets = {'theta': 0.1, 'corr_time': 6, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 24}
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='actcov')
+    print('Method: Actual Covariance')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='actcov')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='actcov')
     exp_dict['bimodal_actcov'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='olaf')
+    print('Method: Cirpka et al. 2007')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='olaf')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='olaf')
     exp_dict['bimodal_olaf'] = {'tf': tf, 'stats': stats}
-    tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='linprox')
+    print('Method: Linear Approximation')
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets,time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='linprox')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm='bimodal',method='linprox')
     exp_dict['bimodal_linprox'] = {'tf': tf, 'stats': stats}
     
     
-    # print exp_dict keys:
-  
+    # write RMSE table to latex:
+    rmse_latex_table(exp_dict,fn_out='chapeau_retry_table.tex')
+    
+    print(asdf)
     #-------------------------------------------------------------------------------------------------------------------
     # RUN FIELD DATA EXAMPLES:
     #----------------------------------------------------------------
     # run Gambill data:
-    num_dets = {'theta': 5, 'corr_time': 24, 'sigma': 0.231, 'sigma_max': 0.4, 'n_h': 64, 'nreal': 10}
-    prefix = 'medQ_R2'
-    time, in_signal, out_signal = load_gambill_data(prefix=prefix)
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=True,ex_nm=f'gambill_{prefix}',method='actcov')
+    # num_dets = {'theta': 5, 'corr_time': 24, 'sigma': 0.231, 'sigma_max': 0.4, 'n_h': 64, 'nreal': 10}
+    # prefix = 'medQ_R2'
+    # time, in_signal, out_signal = load_gambill_data(prefix=prefix)
+    # tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=True,ex_nm=f'gambill_{prefix}',method='actcov')
     
     # run gooseff data:
-    num_dets = {'theta': 10**-6, 'corr_time': 0.1, 'sigma': 0.4, 'sigma_max': 0.8, 'n_h': 500, 'nreal': 25}
+    num_dets = {'theta': 10**-6, 'corr_time': 0.1, 'sigma': 0.4, 'sigma_max': 0.8, 'n_h': 500, 'nreal': 24}
     prefix = '1'
     time, in_signal, out_signal = load_gooseff_data(prefix=prefix)
     assert len(time) == len(in_signal) == len(out_signal), 'Lengths of time, input, and output signals must be equal.'
-    tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=f'gooseff_{prefix}',method='actcov')
-    
+    if num_dets['nreal'] < 20:
+        tf, stats = deconv(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=f'gooseff_{prefix}',method='actcov')
+    else:
+        tf, stats = deconv_parallel(num_dets, time, in_signal, out_signal,fit_ade=False,ex_nm=f'gooseff_{prefix}',method='actcov')
 
     
     
