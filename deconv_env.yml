@@ -1,0 +1,25 @@
+name: deconv_py311
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - pandas>=2.0
+  - numpy<2
+  - matplotlib 
+  - seaborn
+  - openpyxl
+  - xlrd
+  - jupyter 
+  - notebook 
+  - scipy 
+  - rtree
+  - git
+  - nbconvert
+  - pyarrow 
+  - conda-pack
+  - xarray
+  - pip:
+       - dataretrieval
+       - ipympl

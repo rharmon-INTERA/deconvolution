@@ -1348,12 +1348,13 @@ if __name__ == '__main__':
         cpu_num = cpu_count()
     
     add_error = False
-    # -----------------------------------------------------------------------------------------------
-    # RUN EXPERIMENTAL EXAMPLES:
+    
+    # -------------------------------------------------------------
+    # Run known kernels:
     #--------------------------------------------------------------
     exp_dict = {} # save results into dict
     
-    # run chapeau function:
+    # run chapeau kernel:
     print('Running chapeau example...')
     time, in_signal,out_signal = chapeau(add_error=add_error)
     num_dets = {'theta': 2, 'corr_time': 9, 'sigma': 0.1, 'sigma_max': 0.15, 'n_h': None, 'nreal': 24}
