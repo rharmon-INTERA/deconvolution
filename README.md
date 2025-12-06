@@ -1,4 +1,4 @@
-# Cross Timbers Groundwater Availbility Model (GAM) Build/Calibrate/Prediction Wotkflow
+# Deconvolution
 -----------------------------------------------
 This repository contains the complete workflow, Python environment, and datasets used to develop, test, and apply an improved time-domain deconvolution method for estimating transfer functions (residence-time distributions, RTDs) in hydrologic systems.
 
