@@ -110,7 +110,7 @@ def plot_known_kernels(figdir='.'):
     pdf.close()
             
            
-def plot_deconv_results(results_dir, noise_type='on_out',inset_on=False):
+def plot_deconv_results(results_dir, noise_type='on-out',inset_on=False):
     """
     Function to plot results from deconv of knwon kernels.
     
@@ -133,11 +133,11 @@ def plot_deconv_results(results_dir, noise_type='on_out',inset_on=False):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
-    if noise_type == 'on_out':
+    if noise_type == 'on-out':
         noise_sub = 'y'
-    elif noise_type == 'on_in_before_conv':
+    elif noise_type == 'on-in-before-conv':
         noise_sub = 'x'
-    elif noise_type == 'on_in_after_conv':
+    elif noise_type == 'on-in-after-conv':
         noise_sub = r'x^{\ast}'  
     
     if not inset_on:
@@ -145,10 +145,10 @@ def plot_deconv_results(results_dir, noise_type='on_out',inset_on=False):
         subplot_labels = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
         with PdfPages(pdf_path) as pdf:
             for kernel in kernel_types:
-                rdir = os.path.join(results_dir, kernel, 'outputs')
+                rdir = os.path.join(results_dir, kernel, 'outputs',noise_type)
                 files = glob.glob(os.path.join(rdir, '**', '*_data_and_results.csv'), recursive=True)
                 # get noise levels from files:
-                noise_lvls = [os.path.basename(f).split('_')[2] for f in files]
+                noise_lvls = [os.path.basename(f).split('_')[3] for f in files]
                 noise_lvls = sorted(list(set(noise_lvls)))
                 fig, axes = plt.subplots(len(methods), len(noise_lvls), 
                                         figsize=(8.5, 8), sharex=True, sharey=True)
@@ -369,7 +369,169 @@ def plot_deconv_results(results_dir, noise_type='on_out',inset_on=False):
                 plt.close(fig)
 
         print(f"Saved PDF to {pdf_path}")
+
     
+def plot_gambill(ws='.',rchnm='R2',dlvl='medQ',axes_pair=None,leg=False):
+    discharge_dict = {'lowQ': r'$Q = 0.2\ \mathrm{m^3/s}$',
+                    'medQ': r'$Q = 0.5\ \mathrm{m^3/s}$',
+                    'highQ': r'$Q = 1.0\ \mathrm{m^3/s}$',}
+
+    
+    sim = pd.read_csv(os.path.join(ws,f'{dlvl}_{rchnm}_learn_sim.csv'))
+    data = pd.read_csv(os.path.join(ws,f'{dlvl}_{rchnm}_learn_data_and_results.csv'))
+    er = False
+    if 'A_MIM' in rchnm or 'B_MIM' in rchnm:
+        er = True
+
+        if 'A_MIM' in rchnm:
+            rchnm = rchnm.replace('A_MIM', '')
+        if 'B_MIM' in rchnm:
+            rchnm = rchnm.replace('B_MIM', '')
+    print(er)
+
+    ax = axes_pair[0]
+    
+    #ax.set_title(f'{discharge_dict[dlvl]}', fontsize=10)
+    ax.plot(data['time'], data['transfer_func_mean'], '--', color='navy', linewidth=0.75,label='Ensemble mean', zorder=4)
+    ax.plot(data['time'], data['transfer_func_p10'].values,color='lightgrey', zorder=2)
+    ax.plot(data['time'], data['transfer_func_p90'].values,color='lightgrey', zorder=2)
+    ax.set_ylabel(f'{discharge_dict[dlvl]}\n'+r'$\mathbf{g}$ [1/hr]')
+
+    ax.fill_between(data['time'], data['transfer_func_p10'].values, data['transfer_func_p90'].values, color='grey', alpha=0.65, zorder=1, label='10th/90th\nprecentiles')
+
+    ax.minorticks_on()
+
+    ax.tick_params(axis='both', which='both', length=0)
+
+    ax.tick_params(axis='both', which='major',
+                direction='in',
+                length=6, width=1,
+                top=True, bottom=True, left=True, right=True)
+
+    ax.tick_params(axis='both', which='minor',
+                direction='in',
+                length=3, width=0.8,
+                top=True, bottom=True, left=True, right=True)
+
+    ax.grid(True,alpha=0.5)
+
+    ax.set_xlim(0,0.501)
+    ax.set_ylim(0,20)
+    
+    if dlvl != 'highQ':
+        ax.set_xticklabels([])
+    
+    if leg:
+        ax.legend(loc='upper right', fontsize=8, frameon=True)
+
+    ax = axes_pair[1]
+    
+    if er:
+        ax.plot(sim['time'], sim['simulated'], label='Simulated\n bulk EC',linestyle='--',color='grey',zorder=4)
+        ax.plot(sim['time'], sim['output'], label='Measured\n bulk EC',color='k',zorder=3)
+    else:
+        ax.plot(sim['time'], sim['simulated'], label='Simulated\n fluid EC',linestyle='--',color='grey',zorder=4)
+        ax.plot(sim['time'], sim['output'], label='Measured\n fluid EC',color='k',zorder=3)        
+    
+    if leg:
+        ax.legend(loc='upper right', fontsize=8, frameon=True)
+
+    ax.minorticks_on()
+
+    ax.tick_params(axis='both', which='both', length=0)
+
+    ax.tick_params(axis='both', which='major',
+                direction='in',
+                length=6, width=1,
+                top=True, bottom=True, left=True, right=True)
+
+    ax.tick_params(axis='both', which='minor',
+                direction='in',
+                length=3, width=0.8,
+                top=True, bottom=True, left=True, right=True)
+    if er:
+        ax.set_ylabel('Bulk fluid electrical \nconductivity [$\\mu$S/cm]')
+    else:
+        ax.set_ylabel('Fluid electrical \nconductivity [$\\mu$S/cm]')
+    ax.set_ylim(0,60)
+    ax.set_xlim(0,15)
+    ax.grid(True,alpha=0.5)
+ 
+    if dlvl != 'highQ':
+        ax.set_xticklabels([])
+
+
+def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
+    subplot_labels = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
+    with PdfPages(pdf_nm) as pdf:
+        mws = os.path.join('field_studies','gambill','python_make','outputs')
+        fig, axes = plt.subplots(3, 2, figsize=(5.5, 8))
+
+        ax12 = [axes[0, 0], axes[0, 1]]
+        rchnm=rchnm
+        dlvl='lowQ'
+        ws = os.path.join(mws,f'{dlvl}_{rchnm}_learn')
+        plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax12,leg=True)
+        axes[0, 0].text(0.15, 0.98,
+                subplot_labels[0],
+                transform=axes[0, 0].transAxes,
+                ha='right', va='top',
+                fontsize=11, fontweight='bold',
+                zorder=50, clip_on=False
+            ) 
+        axes[0, 1].text(0.15, 0.98,
+                subplot_labels[1],
+                transform=axes[0, 1].transAxes,
+                ha='right', va='top',
+                fontsize=11, fontweight='bold',
+                zorder=50, clip_on=False
+            )   
+                      
+        ax34 = [axes[1, 0], axes[1, 1]]
+        rchnm=rchnm
+        dlvl='medQ'
+        ws = os.path.join(mws,f'{dlvl}_{rchnm}_learn')
+        plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax34)
+        axes[1, 0].text(0.15, 0.98,
+                subplot_labels[2],
+                transform=axes[1, 0].transAxes,
+                ha='right', va='top',
+                fontsize=11, fontweight='bold',
+                zorder=50, clip_on=False
+            ) 
+        axes[1, 1].text(0.15, 0.98,
+                subplot_labels[3],
+                transform=axes[1, 1].transAxes,
+                ha='right', va='top',
+                fontsize=11, fontweight='bold',
+                zorder=50, clip_on=False
+            )
+
+        ax56 = [axes[2, 0], axes[2, 1]]
+        rchnm=rchnm
+        dlvl='highQ'
+        ws = os.path.join(mws,f'{dlvl}_{rchnm}_learn')
+        plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax56)
+        axes[2, 0].text(0.15, 0.98,
+                subplot_labels[4],
+                transform=axes[2, 0].transAxes,
+                ha='right', va='top',
+                fontsize=11, fontweight='bold',
+                zorder=50, clip_on=False
+            ) 
+        axes[2, 1].text(0.15, 0.98,
+                subplot_labels[5],
+                transform=axes[2, 1].transAxes,
+                ha='right', va='top',
+                fontsize=11, fontweight='bold',
+                zorder=50, clip_on=False
+            )
+
+        plt.tight_layout()
+        # save:
+        pdf.savefig(fig, bbox_inches='tight')
+        fig.savefig(pdf_nm.replace('.pdf','.png'), dpi=300, bbox_inches='tight')
+        plt.close(fig)
 
 if __name__ == "__main__":
     set_graph_specifications()
@@ -378,3 +540,10 @@ if __name__ == "__main__":
     plot_known_kernels(figdir=figdir)
 
     results_dir = os.path.join('known_kernels','python_make')
+    plot_deconv_results(results_dir, noise_type='on-out',inset_on=False)
+    
+    figdir = os.path.join('field_studies','gambill','python_make','gambill_figs')
+    if not os.path.exists(figdir):
+         os.makedirs(figdir)
+    plot_reach(pdf_nm=os.path.join(figdir,'reach2_FEC.pdf'),rchnm='R2')
+    plot_reach(pdf_nm=os.path.join(figdir,'reach1_FEC.pdf'),rchnm='R1')

@@ -29,8 +29,8 @@ def make_chapeau(add_input_noise=0.0):
     ins_pth = os.path.join(prefix, "py_inputs")
     os.makedirs(ins_pth, exist_ok=True)
 
-    if add_input_noise > 0.0:
-        prefix += f'_in_noise_bef_conv_{add_input_noise:.3f}'
+    #if add_input_noise > 0.0:
+    #    prefix += f'_in-noise_bef_conv_{add_input_noise:.3f}'
 
     # --- parameters ---
     N = 512       # number of points
@@ -139,8 +139,8 @@ def make_gamma(add_input_noise=0.0):
     os.makedirs(ins_pth, exist_ok=True)
 
     
-    if add_input_noise > 0.0:
-        prefix += f'_in_noise_bef_conv_{add_input_noise:.3f}'
+    #if add_input_noise > 0.0:
+    #    prefix += f'_in_noise_bef_conv_{add_input_noise:.3f}'
 
     # --- parameters ---
     N = 512       # number of points
@@ -263,8 +263,8 @@ def make_bimodal(add_input_noise=0.0):
     ins_pth = os.path.join(prefix, "py_inputs")
     os.makedirs(ins_pth, exist_ok=True)
 
-    if add_input_noise > 0.0:
-        prefix += f'_in_noise_bef_conv_{add_input_noise:.3f}'
+    #if add_input_noise > 0.0:
+    #    prefix += f'_in_noise_bef_conv_{add_input_noise:.3f}'
 
     # --- parameters ---
     N = 512       # number of points

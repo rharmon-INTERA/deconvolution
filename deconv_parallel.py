@@ -91,15 +91,20 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     # Load signals from dataframe
     t = df['time'].values.copy()          # time vector
     inp = df['input'].values.copy()         # input signal
-    kernel = df['kernel'].values.copy()     # transfer function (kernel)
     out_signal = df['output'].values.copy() # output signal
 
     # out directories
     k_type = prefix.split('_')[1]
     noise_level = prefix.split('_')[-1]
-    stats_out = os.path.join('known_kernels','python_make',k_type,'outputs',f'noise_added_{noise_level}')
+    if k_type in ['bimodal', 'chapeau', 'gamma']:
+        noise_type = prefix.split('_')[2]
+        kernel = df['kernel'].values.copy()     # transfer function (kernel)
+        stats_out = os.path.join('known_kernels', 'python_make', k_type, 'outputs', noise_type,f'noise_added_{noise_level}')
+    else:
+        stats_out = os.path.join('field_studies', 'gambill', 'python_make', 'outputs', prefix)
+
     results_out = stats_out
-    figs_out = os.path.join(stats_out,'figures')
+    figs_out = os.path.join(stats_out, 'figures')
     for d in (stats_out, figs_out):
         os.makedirs(d, exist_ok=True)
 
@@ -119,28 +124,37 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     nreal = int(num_dets['nreal'])
     method = str(num_dets['method']).lower()
 
+    theta_converg = float(num_dets['theta_converg'])
+    
     np.random.seed()
 
     x = inp.copy()
     y = out_signal.copy()
 
     # Add noise to y
-    if num_dets['sigma'] != 0:
-        desired_std = num_dets['sigma']
-        std_uniform_minus_05 = 1 / np.sqrt(12)
-        noise_multiplier = desired_std / std_uniform_minus_05
-        y = y + noise_multiplier * (np.random.rand(*y.shape) - 0.5)
-        act_std = np.std(noise_multiplier * (np.random.rand(10000) - 0.5))        
-        print("Actual noise std:", act_std)
+    if k_type in ['bimodal', 'chapeau', 'gamma']:
+        if noise_type == 'on-out':
+            desired_std = num_dets['sigma']
+            std_uniform_minus_05 = 1 / np.sqrt(12)
+            noise_multiplier = desired_std / std_uniform_minus_05
+            y = y + noise_multiplier * (np.random.rand(*y.shape) - 0.5)
+            act_std = np.std(noise_multiplier * (np.random.rand(10000) - 0.5))
+            print("Actual noise std:", act_std)
+        elif noise_type == 'on-in-after-conv':
+            desired_std = num_dets['sigma']
+            std_uniform_minus_05 = 1 / np.sqrt(12)
+            noise_multiplier = desired_std / std_uniform_minus_05
+            x = x + noise_multiplier * (np.random.rand(*x.shape) - 0.5)
+            act_std = np.std(noise_multiplier * (np.random.rand(10000) - 0.5))
+            print("Actual noise std on input after convolution:", act_std)
     else:
         act_std = 0.0
-        print("No noise added to output signal.")
+        print("No noise added to output signal (field).")
 
     # Time increment and covariance setup
     dt = t[1] - t[0]
     corr_time = min(n_h * dt, corr_time)
     n_corr_time = int(np.ceil(corr_time / dt))
-
 
     # Initial triangled covariance (first guess)
     cov = np.zeros(n_h)
@@ -155,10 +169,11 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
 
     rel_cov_change = 999.0
     outer_iter = 0
-
-    while rel_cov_change > 0.1:
+    theta_old = 0.0
+    while (rel_cov_change > 0.5) and (abs(theta_old-theta)/theta>=theta_converg):
         outer_iter += 1
         print(f"Outer iteration {outer_iter}: rel_cov_change = {rel_cov_change:.3g}")
+        print(f'theta change: {abs(theta_old-theta)/theta}')
 
         # Rebuild J each iter
         input_fn = dt * x.copy()
@@ -167,8 +182,11 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
         J = toeplitz(input_fn, r_vec)
 
         # Olaf's linear with current theta, then overwrite with current cov
-        c = dt * theta * np.arange(n_h, 0, -1)
-        c[:len(cov)] = cov
+        if method == 'cirpka':
+            c = dt * theta * np.arange(n_h, 0, -1)
+        else:
+            c = dt * theta * np.arange(n_h, 0, -1)
+            c[:len(cov)] = cov
 
         Q = toeplitz(c)
         epsilon = 1e-8
@@ -233,10 +251,13 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
         if num_dets['parallel']:
             with Pool(cpu_cnt) as pool:
                 h_all_list = pool.map(compute_single_realization, args_list)
-            h_all = np.column_stack(h_all_list)
+            h_all_real = np.column_stack(h_all_list)          # (n_h, nreal)
         else:
-            h_all = np.column_stack([compute_single_realization(a) for a in args_list])
-
+            h_all_real = np.column_stack([compute_single_realization(a) for a in args_list])
+        nreal_eff = nreal 
+        
+        h_all = np.column_stack([h_be, h_all_real]) # include best-estimate as first column
+        
         # ----- Covariance Update -----
         old_cov = cov.copy()
 
@@ -244,20 +265,22 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
         def sumprob(lntheta):
             theta_test = np.exp(lntheta)
             lnpsum = 0.0
-            for i in range(nreal):
+            ng = h_all.shape[0]
+            for i in range(nreal_eff):
                 h_i = h_all[:, i]
-                nnz = np.sum(h_i > 0)
-                ng = h_i.size
-                lnp_i = -nnz / 2.0 * np.log(4.0 * np.pi * theta_test) - (ng - 1) / 2.0 * np.log(1.0)
+                num_nonzero = np.sum(h_i > 0)
+                lnp_i = -num_nonzero/2.0 * np.log(4.0*np.pi*theta_test) - (ng - 1)/2.0 * np.log(1.0)
                 dif = np.diff(h_i)
-                lnp_i -= (dif @ dif) / (4.0 * theta_test)
+                lnp_i -= (dif @ dif) / (4.0*theta_test)
                 lnpsum -= lnp_i
             return float(np.real(lnpsum))
+
 
         x0 = np.log(max(theta, 1e-12))
         maxfun = 200 * np.atleast_1d(x0).size
         res = fmin(lambda z: sumprob(z), x0, xtol=1e-4, ftol=1e-4,
                    maxiter=maxfun, maxfun=maxfun, disp=False)
+        theta_old = theta
         theta = float(np.exp(res[0]))
 
         # triangular cov from theta
@@ -301,8 +324,10 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
 
         # Finalize ensemble stats for this outer iter
         h_all = np.real(h_all)
+        #h_mean = np.mean(h_all[:, :ireal], axis=1) would need to track ireal, but then if runs fail we ignore here
         h_mean = np.mean(h_all, axis=1)
-        L_2 = np.sqrt(dt * np.sum((h_mean - kernel[:len(h_mean)]) ** 2))
+        if k_type in ['bimodal', 'chapeau', 'gamma']:
+            L_2 = np.sqrt(dt * np.sum((h_mean - kernel[:len(h_mean)]) ** 2))
 
     # ===== Final stats & save (unchanged from your code) =====
     trim_time = min(dt * n_h, 30)
@@ -324,7 +349,8 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     skyBlue = [0.35, 0.70, 0.90]
     orange = [0.90, 0.60, 0.00]
     bluishGreen = [0.00, 0.62, 0.45]
-    plt.plot(t_h, kernel[:n_h], '-k', linewidth=1.5, label='Known transfer fx')
+    if k_type in ['bimodal', 'chapeau', 'gamma']:
+        plt.plot(t_h, kernel[:n_h], '-k', linewidth=1.5, label='Known transfer fx')
     plt.plot(t_h, h_mean, linestyle='--', color=bluishGreen, linewidth=1.5, label='Mean h(t)')
     p10_line, = plt.plot(t_h, h_p10, '-', color=orange, linewidth=1, label='10th pct.')
     p90_line, = plt.plot(t_h, h_p90, '-', color=orange, linewidth=1, label='90th pct.')
@@ -339,30 +365,52 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     plt.title(method.capitalize() + f' derived transfer function\n Noise added {rounded_std}', fontsize=14)
     plt.savefig(os.path.join(figs_out,'g_of_t_' + method + f'_{rounded_std}.png'), dpi=300)
     plt.close()
-
-    results_table = pd.DataFrame({
-        'Method': [method.capitalize()],
-        'AddedNoise': [act_std],
-        'Mass_m0': [m_0],
-        'MeanTravelTime_m1': [m_1],
-        'SpreadOfTravelTimes_m2': [var_exp],
-        'RMSE': [RMSE],
-        'CorrelationTime': [corr_time],
-        'FinalSigma': [sigma],
-        'L2': [L_2]
-    })
+    if k_type in ['bimodal', 'chapeau', 'gamma']:
+        results_table = pd.DataFrame({
+            'Method': [method.capitalize()],
+            'AddedNoise': [act_std],
+            'Mass_m0': [m_0],
+            'MeanTravelTime_m1': [m_1],
+            'SpreadOfTravelTimes_m2': [var_exp],
+            'RMSE': [RMSE],
+            'CorrelationTime': [corr_time],
+            'FinalSigma': [sigma],
+            'L2': [L_2]
+        })
+    else:
+        results_table = pd.DataFrame({
+            'Method': [method.capitalize()],
+            'Mass_m0': [m_0],
+            'MeanTravelTime_m1': [m_1],
+            'SpreadOfTravelTimes_m2': [var_exp],
+            'RMSE': [RMSE],
+            'CorrelationTime': [corr_time],
+            'FinalSigma': [sigma]
+        })
     csv_filename = prefix + '_' + method + '_stats.csv'
     results_table.to_csv(os.path.join(stats_out, csv_filename), index=False)
 
     df_subset = df.iloc[:300].copy()
-    df_subset['time'] = t[:300]
+    df_subset['time'] = t_h[:300]
     df_subset['input'] = x[:300]
     df_subset['output'] = y[:300]
-    df_subset['kernel'] = kernel[:300]
+    if k_type in ['bimodal', 'chapeau', 'gamma']:
+        df_subset['kernel'] = kernel[:300]
     df_subset['transfer_func_mean'] = h_mean
     df_subset['transfer_func_p10'] = h_p10
     df_subset['transfer_func_p90'] = h_p90
     df_subset.to_csv(os.path.join(results_out, prefix + '_data_and_results.csv'), index=False)
+
+    # save best estimate simulation:
+    y_pred = (J @ h_mean).ravel()   # ensure 1-D array
+    bsim = pd.DataFrame({
+        'time': df['time'].values.copy(),
+        'input': x.ravel(),
+        'output': y.ravel(),
+        'simulated': y_pred
+    })
+    out_file = os.path.join(results_out, prefix + '_sim.csv')
+    bsim.to_csv(out_file, index=False)
 
     return df_subset, results_table
 
@@ -371,7 +419,7 @@ if __name__ == '__main__':
     
     # run control vars:
     run_knwn_kernels = True
-    noise_type = 'on_out'  # must be 'on_out','on_in_before_conv', or 'on_in_after_conv', needed for knwn kernels
+    noise_type = 'on-out'  # must be 'on-out','on-in-before-conv', or 'on-in-after-conv', needed for knwn kernels
     
     run_gambill = False
     
@@ -383,22 +431,34 @@ if __name__ == '__main__':
     if run_knwn_kernels:
         kernels = ['chapeau', 'gamma', 'bimodal']
         for kernel_shape in kernels:
+            curdir = os.getcwd()
+            os.chdir(os.path.join('known_kernels','python_make'))
             if kernel_shape == 'chapeau':
-                # add_input_noise, enter noise if you want added before convolution with kernel
-                df = make_kern.make_chapeau(add_input_noise=0.0)
+                df = make_kern.make_chapeau()
             elif kernel_shape == 'gamma':
-                df = make_kern.make_gamma(add_input_noise=0.0)
+                df = make_kern.make_gamma()
             elif kernel_shape == 'bimodal':
-                df = make_kern.make_bimodal(add_input_noise=0.0)
-
+                df = make_kern.make_bimodal()
+            os.chdir(curdir)
             time, in_signal,out_signal = df['time'].values, df['input'].values, df['output'].values
             
-            noise_levels = [0.001, 0.03,0.09] # this is noise added onto output signal
+            noise_levels = [0.005, 0.03,0.09] # this is noise added onto output signal
             results_dict = {}
             methods = ['learn','cirpka']
             for method in methods:
                 run_key = f'{kernel_shape}_{method}'
                 for nl in noise_levels:
+                    # if adding noise before convolution, need to remake df each time
+                    os.chdir(os.path.join('known_kernels','python_make'))
+                    if noise_type == 'on-in-before-conv':
+                        if kernel_shape == 'chapeau':
+                            df = make_kern.make_chapeau(add_input_noise=nl)
+                        elif kernel_shape == 'gamma':
+                            df = make_kern.make_gamma(add_input_noise=nl)
+                        elif kernel_shape == 'bimodal':
+                            df = make_kern.make_bimodal(add_input_noise=nl)
+                    os.chdir(curdir)
+
                     sigma_max = 0.09
                     run_key += f'_{nl}'
                     if nl > sigma_max:
@@ -406,25 +466,116 @@ if __name__ == '__main__':
                     num_dets = {'theta': 0.02, 'corr_time': 40, 
                                 'sigma': nl, 'sigma_max': sigma_max, 
                                 'n_h': 300,'nreal': 56, 'parallel': run_in_parallel,
-                                'method':method}
+                                'method':method, 'theta_converg':0.0}
                     nl = f'{nl:.3f}'
-                    results, stats = deconv_parallel(df, num_dets, prefix=f'{method}_{kernel_shape}_{nl}')
+                    results, stats = deconv_parallel(df, num_dets, prefix=f'{method}_{kernel_shape}_{noise_type}_{nl}')
                     results_dict[run_key] = {
                         'results': results,
                         'stats': stats
                     }
                     print(f"Results for {run_key} saved.")
-            if plot_figs:
-                pyplt.plot_deconv_results(os.path.join('known_kernels','python_make'), noise_type=noise_type,inset_on=False)
+    if plot_figs:
+        pyplt.plot_deconv_results(os.path.join('known_kernels','python_make'), noise_type=noise_type,inset_on=False)
+
+
     
+            
+    if run_gambill:
+        ws = os.path.join('field_studies', 'gambill', 'data')
+        list_csv_files = [f for f in os.listdir(ws) if f.endswith('.csv')]
+        # remove '.csv' from names
+        sites = [f[:-4] for f in list_csv_files]
+        # drop sites ending '_MIM'
+        sites = [s for s in sites if not s.endswith('_MIM')]
+        
+        method = 'learn'  # 'learn' or 'cirpka'
+        
+        nl = 1
+        sigma_max = 5.0
+        
+        # set theta converg to 0.0 for runs that have no problem converging under
+        # the relative covariance change criterion.
+        sites_dict = {
+            'highQ_R1': {'theta': 1e-4, 'corr_time': 10,
+                        'sigma': 0.231, 'sigma_max': 1.0,
+                        'n_h': 1600, 'nreal': 64, 'parallel': run_in_parallel,
+                        'method': method,'theta_converg':0.0},
+
+            'highQ_R2': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
+                        'method': method,'theta_converg':0.0},
+
+            'highQ_long': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
+                        'method': method,'theta_converg':0.0},
+
+            'lowQ_R1': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
+                        'method': method,'theta_converg':0.0},
+
+            'lowQ_R2': {'theta': 12, 'corr_time': 10,
+                        'sigma': 0.1, 'sigma_max': 0.52,
+                        'n_h': 68, 'nreal': 16, 'parallel': run_in_parallel,
+                        'method': method, 'theta_converg':0.0},
+
+            'lowQ_long': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
+                        'method': method, 'theta_converg':0.0},
+
+            'medQ_R1': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
+                        'method': method, 'theta_converg':0.0},
+
+            'medQ_R2': {'theta': 1e-4, 'corr_time': 10,
+                        'sigma': 0.231, 'sigma_max': 1.0,
+                        'n_h': 300, 'nreal': 16, 'parallel': run_in_parallel,
+                        'method': method, 'theta_converg':0.0},
+
+            'medQ_long': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
+                        'method': method, 'theta_converg':0.0}
+            }
+        sites_dict = {
+            'lowQ_R1': {'theta': 1e-4, 'corr_time': 10,
+                        'sigma': 0.231, 'sigma_max': 1.,
+                        'n_h': 300, 'nreal': 50, 'parallel': run_in_parallel,
+                        'method': method,'theta_converg':0.0001},
+            'medQ_R1': {'theta': 1e-4, 'corr_time': 10,
+                        'sigma': 0.231, 'sigma_max': 1.0,
+                        'n_h': 300, 'nreal': 50, 'parallel': run_in_parallel,
+                        'method': method, 'theta_converg':0.0},
+            'highQ_R1': {'theta': 0.02, 'corr_time': 40,
+                        'sigma': nl, 'sigma_max': sigma_max,
+                        'n_h': 300, 'nreal': 50, 'parallel': run_in_parallel,
+                        'method': method,'theta_converg':0.0},
+
+            }        
+        
+        for site in sites:
+            if site in sites_dict:
+                file_path = os.path.join(ws, site + '.csv')
+                df = pd.read_csv(file_path)
+                df = df.rename(columns={'in': 'input', 'out': 'output'})
+                num_dets = sites_dict[site]
+                results, stats = deconv_parallel(df, num_dets, prefix=f'{site}_{method}')
+
+                print(f"Deconvolution for site {site} completed.")
+                
     # 11/10 notes all examples run, but cirpka looks like it has an issue probs zero start. Next steps,
     # run gambill data and use parallel processing to confirm it works. Then need to get plottting and latex
     # tables upadted and in the draft. Then clean repo and add readme.
-    
-    # save to json:
-    with open(f'{kernel_shape}_deconv_results.json', 'w') as f:
-        json.dump(results_dict, f, indent=4)
-    print("Results saved to deconv_results.json")
-    print("Deconvolution completed.")
 
+    # 12/1-8 notes: 
+    #   - re-test bef_conv noise addition
+    #   - add tim it and save n outer iters to stats
+    #   - finalize latex tabl gen 
+    #   - mention to Dave the converg issue with no noise case, seems that atleast 0.005 noise is needed for stable runs
+    #   - comapre Cirpka and learn on Gambill data
+    #   - get the final set of matlab run scripts organized and into git repo
 
