@@ -147,6 +147,9 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             x = x + noise_multiplier * (np.random.rand(*x.shape) - 0.5)
             act_std = np.std(noise_multiplier * (np.random.rand(10000) - 0.5))
             print("Actual noise std on input after convolution:", act_std)
+        else:
+            act_std = num_dets['sigma']
+            print("No noise added to output signal (field), noise was added to input before convolution.")
     else:
         act_std = 0.0
         print("No noise added to output signal (field).")
@@ -572,10 +575,10 @@ if __name__ == '__main__':
     # tables upadted and in the draft. Then clean repo and add readme.
 
     # 12/1-8 notes: 
-    #   - re-test bef_conv noise addition
+    #   - re-test bef_conv noise addition (done)
     #   - add tim it and save n outer iters to stats
     #   - finalize latex tabl gen 
-    #   - mention to Dave the converg issue with no noise case, seems that atleast 0.005 noise is needed for stable runs
-    #   - comapre Cirpka and learn on Gambill data
+    #   - mention to Dave the converg issue with no noise case, seems that atleast 0.005 noise is needed for stable runs across all cases
+    #   - comapre Cirpka and learn on Gambill data, quantify differences from obs out, comp time, and # outter iters 
     #   - get the final set of matlab run scripts organized and into git repo
 
