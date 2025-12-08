@@ -1,1 +1,0 @@
-In the data directory you will find tracer test data collected in Gambill et al. (***update cite when available***). Please contact me at dbenson@mines.edu for an update on that citation.  The tracer tests were conducted at low, medium, and high flows, hence the csv filenames.   
