@@ -1,0 +1,32 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\renewcommand{\arraystretch}{1.0}
+\begin{table}[H]
+\caption{Performance metrics using the chapeau kernel with noise added to output signal ($ \y $)}
+\centering
+
+\begin{tabular}{
+>{\centering\arraybackslash}p{2.4cm} 
+>{\centering\arraybackslash}p{1.3cm} 
+>{\centering\arraybackslash}p{1.8cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.6cm} 
+>{\centering\arraybackslash}p{1.4cm} 
+}
+\small Method &\multicolumn{1}{c}{\small \shortstack{Added\\Noise ($\sigma_\y$)}} &\multicolumn{1}{c}{\small \shortstack{Recovered\\Noise}} &\multicolumn{1}{c}{\small \shortstack{Correlation\\Time (hr)}} &\multicolumn{1}{c}{\small \shortstack{Solve\\Time (min)}} &\multicolumn{1}{c}{\small \shortstack{RMSE\\($\X\bar\g$, $\y$)}} &\small $L^2$ ($\bar\g,\k$) \\
+
+\hline
+\multirow{3}{*}{\shortstack{Modified\\Cirpka}}
+    & 0.005 & 0.002 & 30 & 2.44 & 0.0016 & 0.0245 \\
+    & 0.03 & 0.009 & 30 & 0.82 & 0.0089 & 0.0317 \\
+    & 0.09 & 0.030 & 30 & 0.5 & 0.0284 & 0.0321 \\
+\hline
+\multirow{3}{*}{Learn}
+    & 0.005 & 0.002 & 3.86 & 0.7 & 0.0016 & 0.0240 \\
+    & 0.03 & 0.011 & 3.86 & 0.2 & 0.0102 & 0.0303 \\
+    & 0.09 & 0.032 & 3.86 & 0.13 & 0.0316 & 0.0326 \\
+\hline
+\end{tabular}
+\label{tab:chapeau_on-in-before-conv_performance_metrics}
+\end{table}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -13,6 +13,7 @@ from scipy.linalg import toeplitz
 from scipy.optimize import fmin
 from multiprocessing import Pool
 import multiprocessing
+import time as time_mod
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -159,6 +160,9 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     corr_time = min(n_h * dt, corr_time)
     n_corr_time = int(np.ceil(corr_time / dt))
 
+    # ---- start wall-clock timing ----
+    t_start = time_mod.perf_counter()
+    
     # Initial triangled covariance (first guess)
     cov = np.zeros(n_h)
     if n_corr_time > 0:
@@ -333,6 +337,11 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             L_2 = np.sqrt(dt * np.sum((h_mean - kernel[:len(h_mean)]) ** 2))
 
     # ===== Final stats & save (unchanged from your code) =====
+    # ---- stop timing ----
+    t_end = time_mod.perf_counter()
+    solve_time_sec = t_end - t_start
+    solve_time_min = solve_time_sec / 60.0
+
     trim_time = min(dt * n_h, 30)
     n_trim = min(n_h, 1 + int(np.ceil(trim_time / dt)))
     h_trim = h_mean[:n_trim]
@@ -378,7 +387,9 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             'RMSE': [RMSE],
             'CorrelationTime': [corr_time],
             'FinalSigma': [sigma],
-            'L2': [L_2]
+            'L2': [L_2],
+            'SolveTime_sec': [solve_time_sec],
+            'SolveTime_min': [solve_time_min],
         })
     else:
         results_table = pd.DataFrame({
@@ -388,8 +399,13 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             'SpreadOfTravelTimes_m2': [var_exp],
             'RMSE': [RMSE],
             'CorrelationTime': [corr_time],
-            'FinalSigma': [sigma]
+            'FinalSigma': [sigma],
+            'SolveTime_sec': [solve_time_sec],
+            'SolveTime_min': [solve_time_min],
         })
+    
+    print(f"Solve time ({method}): {solve_time_sec:.2f} s ({solve_time_min:.2f} min)")
+
     csv_filename = prefix + '_' + method + '_stats.csv'
     results_table.to_csv(os.path.join(stats_out, csv_filename), index=False)
 
@@ -422,7 +438,7 @@ if __name__ == '__main__':
     
     # run control vars:
     run_knwn_kernels = True
-    noise_type = 'on-out'  # must be 'on-out','on-in-before-conv', or 'on-in-after-conv', needed for knwn kernels
+    noise_type = 'on-in-after-conv' # must be 'on-out','on-in-before-conv', or 'on-in-after-conv', needed for knwn kernels
     
     run_gambill = False
     
@@ -462,7 +478,7 @@ if __name__ == '__main__':
                             df = make_kern.make_bimodal(add_input_noise=nl)
                     os.chdir(curdir)
 
-                    sigma_max = 0.09
+                    sigma_max = 0.12
                     run_key += f'_{nl}'
                     if nl > sigma_max:
                         sigma_max = nl + 0.03

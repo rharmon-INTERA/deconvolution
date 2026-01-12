@@ -1,0 +1,32 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\renewcommand{\arraystretch}{1.0}
+\begin{table}[H]
+\caption{Performance metrics using the bimodal kernel with noise added to output signal ($ \y $)}
+\centering
+
+\begin{tabular}{
+>{\centering\arraybackslash}p{2.4cm} 
+>{\centering\arraybackslash}p{1.3cm} 
+>{\centering\arraybackslash}p{1.8cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.6cm} 
+>{\centering\arraybackslash}p{1.4cm} 
+}
+\small Method &\multicolumn{1}{c}{\small \shortstack{Added\\Noise ($\sigma_\y$)}} &\multicolumn{1}{c}{\small \shortstack{Recovered\\Noise}} &\multicolumn{1}{c}{\small \shortstack{Correlation\\Time (hr)}} &\multicolumn{1}{c}{\small \shortstack{Solve\\Time (min)}} &\multicolumn{1}{c}{\small \shortstack{RMSE\\($\X\bar\g$, $\y$)}} &\small $L^2$ ($\bar\g,\k$) \\
+
+\hline
+\multirow{3}{*}{\shortstack{Modified\\Cirpka}}
+    & 0.005 & 0.008 & 30 & 0.22 & 0.0050 & 0.0007 \\
+    & 0.03 & 0.120 & 30 & 0.24 & 0.2024 & 0.0628 \\
+    & 0.09 & 0.120 & 30 & 0.21 & 0.2130 & 0.0606 \\
+\hline
+\multirow{3}{*}{Learn}
+    & 0.005 & 0.007 & 15.38 & 0.06 & 0.0050 & 0.0015 \\
+    & 0.03 & 0.043 & 15.39 & 0.05 & 0.0298 & 0.0027 \\
+    & 0.09 & 0.120 & 15.63 & 0.05 & 0.0887 & 0.0043 \\
+\hline
+\end{tabular}
+\label{tab:bimodal_on-out_performance_metrics}
+\end{table}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

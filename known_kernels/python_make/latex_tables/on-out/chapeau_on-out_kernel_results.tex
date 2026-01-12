@@ -1,0 +1,32 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\renewcommand{\arraystretch}{1.0}
+\begin{table}[H]
+\caption{Known chapeau kernel properties and estimated kernel properties with noise added to output signal ($ \y $)}
+\centering
+
+\begin{tabular}{
+>{\centering\arraybackslash}p{2.0cm} 
+>{\centering\arraybackslash}p{1.2cm} 
+>{\centering\arraybackslash}p{1.2cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+}
+\multicolumn{1}{c}{\small Method} & \multicolumn{1}{c}{\small \shortstack{Added\\Noise ($\sigma_\y$)}} &\multicolumn{1}{c}{\small \shortstack{Total Mass\\ ($m_0$)}} &\multicolumn{1}{c}{\small \shortstack{Mean Travel\\Time ($m_1$)}} &\multicolumn{1}{c}{\small \shortstack{Spread of\\Travel Times ($m_2$)}} \\
+
+\toprule
+\parbox[c]{2.0cm}{\centering Known Kernel\\Properties:} & -- & 1.000 & 2.500 & 1.200 \\
+\midrule
+\multicolumn{5}{c}{\textit{Estimated Kernels}} \\
+\midrule
+\multirow{3}{*}{\shortstack{Modified\\Cirpka}} & 0.005 & 1.000 & 2.507 & 1.197 \\
+                        & 0.03 & 1.006 & 2.574 & 2.380 \\
+                        & 0.09 & 1.040 & 2.769 & 7.632 \\
+\cmidrule(lr){2-5}
+\multirow{3}{*}{Learn} & 0.005 & 1.001 & 2.511 & 1.281 \\
+                        & 0.03 & 1.005 & 2.600 & 2.918 \\
+                        & 0.09 & 1.012 & 2.772 & 5.904 \\
+\hline
+\end{tabular}
+\label{tab:chapeau_on-out_kernel_results}
+\end{table}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

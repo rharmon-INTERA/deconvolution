@@ -535,12 +535,12 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
 
 if __name__ == "__main__":
     set_graph_specifications()
-    figdir = os.path.join('known_kernels','python_make','figs')
+    figdir = os.path.join('known_kernels','python_make','figs_known_kernels')
 
     plot_known_kernels(figdir=figdir)
-
+    
     results_dir = os.path.join('known_kernels','python_make')
-    plot_deconv_results(results_dir, noise_type='on-out',inset_on=False)
+    plot_deconv_results(results_dir, noise_type='on-in-after-conv',inset_on=False)
     
     figdir = os.path.join('field_studies','gambill','python_make','gambill_figs')
     if not os.path.exists(figdir):

@@ -1,0 +1,32 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\renewcommand{\arraystretch}{1.0}
+\begin{table}[H]
+\caption{Performance metrics using the gamma kernel with noise added to output signal ($ \y $)}
+\centering
+
+\begin{tabular}{
+>{\centering\arraybackslash}p{2.4cm} 
+>{\centering\arraybackslash}p{1.3cm} 
+>{\centering\arraybackslash}p{1.8cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.5cm} 
+>{\centering\arraybackslash}p{1.6cm} 
+>{\centering\arraybackslash}p{1.4cm} 
+}
+\small Method &\multicolumn{1}{c}{\small \shortstack{Added\\Noise ($\sigma_\y$)}} &\multicolumn{1}{c}{\small \shortstack{Recovered\\Noise}} &\multicolumn{1}{c}{\small \shortstack{Correlation\\Time (hr)}} &\multicolumn{1}{c}{\small \shortstack{Solve\\Time (min)}} &\multicolumn{1}{c}{\small \shortstack{RMSE\\($\X\bar\g$, $\y$)}} &\small $L^2$ ($\bar\g,\k$) \\
+
+\hline
+\multirow{3}{*}{\shortstack{Modified\\Cirpka}}
+    & 0.005 & 0.001 & 30 & 1.02 & 0.0009 & 0.0005 \\
+    & 0.03 & 0.010 & 30 & 0.64 & 0.0077 & 0.0030 \\
+    & 0.09 & 0.120 & 30 & 0.6 & 0.2459 & 0.0976 \\
+\hline
+\multirow{3}{*}{Learn}
+    & 0.005 & 0.001 & 10.75 & 0.21 & 0.0008 & 0.0029 \\
+    & 0.03 & 0.009 & 10.7 & 0.14 & 0.0071 & 0.0039 \\
+    & 0.09 & 0.026 & 10.68 & 0.1 & 0.0205 & 0.0040 \\
+\hline
+\end{tabular}
+\label{tab:gamma_on-in-after-conv_performance_metrics}
+\end{table}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
