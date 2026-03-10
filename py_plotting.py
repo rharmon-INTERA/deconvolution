@@ -7,6 +7,11 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+%matplotlib widget
+
 
 def set_graph_specifications():
     rc_dict = {'font.family': 'DejaVu Sans',
@@ -533,17 +538,310 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
         fig.savefig(pdf_nm.replace('.pdf','.png'), dpi=300, bbox_inches='tight')
         plt.close(fig)
 
+
+def plot_gambill_compare_highQ_R1(
+    mws_learn=os.path.join('field_studies','gambill','python_make','outputs_learn'),
+    mws_cirpka=os.path.join('field_studies','gambill','python_make','outputs_cirpka'),
+    rchnm='R1',
+    dlvl='highQ',
+    outpath=None,
+    figsize=(10, 7.2),
+    tf_xlim=(0, 0.25),
+    tf_ylim=(0, 35),
+    tf_log_ylim=(1e-2, 100),
+    ec_xlim=(0, 15),
+    ec_ylim=(0, 25),
+    add_legend=True,
+
+    # --- NEW: inset controls for panel (c)
+    ec_inset=False,
+    ec_inset_xlim=None,   # (x1, x2)
+    ec_inset_ylim=None,   # (y1, y2)
+    ec_inset_bbox=(0.62, 0.33, 0.36, 0.34),  # (x0, y0, w, h) in ax_c axes fraction
+    ec_inset_label="",
+    ec_inset_grid=True,
+
+    # --- NEW: percentile band controls
+    show_tf_pbands=True,
+    pb_ls=":",          # dotted
+    pb_lw=1.5,
+    pb_alpha=0.9,
+    log_floor=1e-12,    # avoid log(0) on p10/p90
+):
+    """
+    Creates a 3-panel figure:
+      (a) transfer functions (linear y): mean + optional p10/p90
+      (b) transfer functions (semilog-y): mean + optional p10/p90
+      (c) measured downstream EC + simulated convolution (learn vs cirpka)
+          with optional inset zoom.
+
+    Expected folder structure (per method workspace):
+      {mws_method}/{dlvl}_{rchnm}_{method}/
+        - {dlvl}_{rchnm}_{method}_sim.csv
+        - {dlvl}_{rchnm}_{method}_data_and_results.csv
+    """
+
+    def _load(method: str, mws_base: str):
+        ws = os.path.join(mws_base, f"{dlvl}_{rchnm}_{method}")
+        sim_fp  = os.path.join(ws, f"{dlvl}_{rchnm}_{method}_sim.csv")
+        data_fp = os.path.join(ws, f"{dlvl}_{rchnm}_{method}_data_and_results.csv")
+
+        if not os.path.isfile(sim_fp):
+            raise FileNotFoundError(f"Missing sim CSV: {sim_fp}")
+        if not os.path.isfile(data_fp):
+            raise FileNotFoundError(f"Missing data/results CSV: {data_fp}")
+
+        sim = pd.read_csv(sim_fp)
+        data = pd.read_csv(data_fp)
+        return ws, sim, data
+
+    # Load both methods
+    _, sim_learn,  data_learn  = _load("learn",  mws_learn)
+    _, sim_cirpka, data_cirpka = _load("cirpka", mws_cirpka)
+
+    # Ensure needed columns exist
+    needed_base = ["time", "transfer_func_mean"]
+    needed_p = ["transfer_func_p10", "transfer_func_p90"]
+    for nm, d in [("learn", data_learn), ("cirpka", data_cirpka)]:
+        missing = [c for c in needed_base if c not in d.columns]
+        if missing:
+            raise KeyError(f"{nm} data/results CSV missing columns: {missing}")
+        if show_tf_pbands:
+            missing_p = [c for c in needed_p if c not in d.columns]
+            if missing_p:
+                raise KeyError(f"{nm} data/results CSV missing columns: {missing_p}")
+
+    # Figure layout
+    fig = plt.figure(figsize=figsize)
+    gs = GridSpec(
+        nrows=2, ncols=2,
+        width_ratios=[1.0, 1.55],
+        height_ratios=[1, 1],
+        wspace=0.28, hspace=0.22
+    )
+    ax_a = fig.add_subplot(gs[0, 0])
+    ax_b = fig.add_subplot(gs[1, 0])
+    ax_c = fig.add_subplot(gs[:, 1])
+
+    # Style constants
+    col_learn = "tab:blue"
+    col_cirp  = "grey"
+    ls_mean_learn = "-"
+    ls_mean_cirp  = "--"
+
+    # -------------------------
+    # (a) Transfer functions (linear y)
+    # -------------------------
+    ax_a.plot(
+        data_learn["time"], data_learn["transfer_func_mean"],
+        linestyle=ls_mean_learn, linewidth=1.2, color=col_learn, label="COV-Learn"
+    )
+    ax_a.plot(
+        data_cirpka["time"], data_cirpka["transfer_func_mean"],
+        linestyle=ls_mean_cirp, linewidth=1.2, color=col_cirp, label="Cirpka"
+    )
+
+    if show_tf_pbands:
+        # learn p10/p90
+        ax_a.plot(
+            data_learn["time"], data_learn["transfer_func_p10"],
+            linestyle=pb_ls, linewidth=pb_lw, color=col_learn, alpha=pb_alpha,
+            label="COV-Learn p10/p90"
+        )
+        ax_a.plot(
+            data_learn["time"], data_learn["transfer_func_p90"],
+            linestyle=pb_ls, linewidth=pb_lw, color=col_learn, alpha=pb_alpha
+        )
+        # cirpka p10/p90
+        ax_a.plot(
+            data_cirpka["time"], data_cirpka["transfer_func_p10"],
+            linestyle=pb_ls, linewidth=pb_lw, color=col_cirp, alpha=pb_alpha,
+            label="Cirpka p10/p90"
+        )
+        ax_a.plot(
+            data_cirpka["time"], data_cirpka["transfer_func_p90"],
+            linestyle=pb_ls, linewidth=pb_lw, color=col_cirp, alpha=pb_alpha
+        )
+
+    ax_a.set_xlim(*tf_xlim)
+    ax_a.set_ylim(*tf_ylim)
+    ax_a.set_ylabel(r'$\mathbf{g}$ [1/hr]')
+    ax_a.grid(True, alpha=0.5)
+    ax_a.minorticks_on()
+
+    # -------------------------
+    # (b) Transfer functions (semilog-y)
+    # -------------------------
+    ax_b.semilogy(
+        data_learn["time"], data_learn["transfer_func_mean"],
+        linestyle=ls_mean_learn, linewidth=1.2, color=col_learn
+    )
+    ax_b.semilogy(
+        data_cirpka["time"], data_cirpka["transfer_func_mean"],
+        linestyle=ls_mean_cirp, linewidth=1.2, color=col_cirp
+    )
+
+    if show_tf_pbands:
+        # guard against zeros/negatives in log-scale plot
+        lp10 = np.maximum(data_learn["transfer_func_p10"].to_numpy(), log_floor)
+        lp90 = np.maximum(data_learn["transfer_func_p90"].to_numpy(), log_floor)
+        cp10 = np.maximum(data_cirpka["transfer_func_p10"].to_numpy(), log_floor)
+        cp90 = np.maximum(data_cirpka["transfer_func_p90"].to_numpy(), log_floor)
+
+        ax_b.semilogy(
+            data_learn["time"], lp10,
+            linestyle=pb_ls, linewidth=pb_lw, color=col_learn, alpha=pb_alpha
+        )
+        ax_b.semilogy(
+            data_learn["time"], lp90,
+            linestyle=pb_ls, linewidth=pb_lw, color=col_learn, alpha=pb_alpha
+        )
+
+        ax_b.semilogy(
+            data_cirpka["time"], cp10,
+            linestyle=pb_ls, linewidth=pb_lw, color=col_cirp, alpha=pb_alpha
+        )
+        ax_b.semilogy(
+            data_cirpka["time"], cp90,
+            linestyle=pb_ls, linewidth=pb_lw, color=col_cirp, alpha=pb_alpha
+        )
+
+    ax_b.set_xlim(*tf_xlim)
+    ax_b.set_ylim(*tf_log_ylim)
+    ax_b.set_xlabel("Time [hr]")
+    ax_b.set_ylabel(r'$\mathbf{g}$ [1/hr] (log)')
+    ax_b.grid(True, which="both", alpha=0.5)
+    ax_b.minorticks_on()
+
+    # -------------------------
+    # (c) Downstream EC: measured + simulated convolutions
+    # -------------------------
+    ax_c.plot(
+        sim_learn["time"], sim_learn["output"],
+        color="k", linestyle="-", linewidth=1.3, label="Measured EC"
+    )
+    ax_c.plot(
+        sim_learn["time"], sim_learn["simulated"],
+        color=col_learn, linestyle="-.", linewidth=1.2, label="Simulated (COV-Learn)"
+    )
+    ax_c.plot(
+        sim_cirpka["time"], sim_cirpka["simulated"],
+        color=col_cirp, linestyle="--", linewidth=1.2, label="Simulated (Cirpka)"
+    )
+
+    ax_c.set_xlim(*ec_xlim)
+    ax_c.set_ylim(*ec_ylim)
+    ax_c.set_xlabel("Time [hr]")
+    ax_c.set_ylabel('Fluid electrical\nconductivity [$\\mu$S/cm]')
+    ax_c.grid(True, alpha=0.5)
+    ax_c.minorticks_on()
+
+    # -------------------------
+    # inset zoom inside panel (c)
+    # -------------------------
+    ax_c_inset = None
+    if ec_inset:
+        if ec_inset_xlim is None or ec_inset_ylim is None:
+            raise ValueError("If ec_inset=True, provide ec_inset_xlim=(x1,x2) and ec_inset_ylim=(y1,y2).")
+
+        x0, y0, w, h = ec_inset_bbox
+        ax_c_inset = ax_c.inset_axes([x0, y0, w, h], transform=ax_c.transAxes)
+
+        ax_c_inset.plot(sim_learn["time"], sim_learn["output"],
+                        color="k", linestyle="-", linewidth=1.0)
+        ax_c_inset.plot(sim_learn["time"], sim_learn["simulated"],
+                        color=col_learn, linestyle="-.", linewidth=1.0)
+        ax_c_inset.plot(sim_cirpka["time"], sim_cirpka["simulated"],
+                        color=col_cirp, linestyle="--", linewidth=1.0)
+
+        ax_c_inset.set_xlim(*ec_inset_xlim)
+        ax_c_inset.set_ylim(*ec_inset_ylim)
+        ax_c_inset.tick_params(labelsize=8)
+        ax_c_inset.minorticks_on()
+        if ec_inset_grid:
+            ax_c_inset.grid(True, alpha=0.35)
+
+        if ec_inset_label:
+            ax_c_inset.text(0.02, 0.98, ec_inset_label,
+                            transform=ax_c_inset.transAxes,
+                            ha="left", va="top", fontsize=8, fontweight="bold")
+
+        ax_c.indicate_inset_zoom(ax_c_inset, edgecolor="0.3", linewidth=0.8)
+
+    # -------------------------
+    # tick styling
+    # -------------------------
+    for ax in (ax_a, ax_b, ax_c):
+        ax.tick_params(axis='both', which='both', length=0)
+        ax.tick_params(axis='both', which='major',
+                       direction='in', length=6, width=1,
+                       top=True, bottom=True, left=True, right=True)
+        ax.tick_params(axis='both', which='minor',
+                       direction='in', length=3, width=0.8,
+                       top=True, bottom=True, left=True, right=True)
+
+    if ax_c_inset is not None:
+        ax_c_inset.tick_params(axis='both', which='both', length=0)
+        ax_c_inset.tick_params(axis='both', which='major',
+                               direction='in', length=4, width=0.9,
+                               top=True, bottom=True, left=True, right=True)
+        ax_c_inset.tick_params(axis='both', which='minor',
+                               direction='in', length=2, width=0.7,
+                               top=True, bottom=True, left=True, right=True)
+
+    # panel labels
+    ax_a.text(0.03, 0.98, "(a)", transform=ax_a.transAxes,
+              ha="left", va="top", fontsize=11, fontweight="bold", zorder=50)
+    ax_b.text(0.03, 0.98, "(b)", transform=ax_b.transAxes,
+              ha="left", va="top", fontsize=11, fontweight="bold", zorder=50)
+    ax_c.text(0.02, 0.98, "(c)", transform=ax_c.transAxes,
+              ha="left", va="top", fontsize=11, fontweight="bold", zorder=50)
+
+    if add_legend:
+        # panel (a): legend includes mean + p10/p90 labels (but won’t repeat p90 duplicates)
+        ax_a.legend(loc="upper right", fontsize=8, frameon=True)
+        ax_c.legend(loc="upper right", fontsize=8, frameon=True)
+
+    if outpath is not None:
+        fig.savefig(outpath, dpi=300, bbox_inches="tight")
+
+    return fig, (ax_a, ax_b, ax_c)
+
 if __name__ == "__main__":
     set_graph_specifications()
     figdir = os.path.join('known_kernels','python_make','figs_known_kernels')
 
-    plot_known_kernels(figdir=figdir)
+    #plot_known_kernels(figdir=figdir)
     
     results_dir = os.path.join('known_kernels','python_make')
-    plot_deconv_results(results_dir, noise_type='on-in-after-conv',inset_on=False)
+    plot_deconv_results(results_dir, noise_type='on-out',inset_on=False)
     
     figdir = os.path.join('field_studies','gambill','python_make','gambill_figs')
     if not os.path.exists(figdir):
          os.makedirs(figdir)
-    plot_reach(pdf_nm=os.path.join(figdir,'reach2_FEC.pdf'),rchnm='R2')
-    plot_reach(pdf_nm=os.path.join(figdir,'reach1_FEC.pdf'),rchnm='R1')
+    #plot_reach(pdf_nm=os.path.join(figdir,'reach2_FEC.pdf'),rchnm='R2')
+    #plot_reach(pdf_nm=os.path.join(figdir,'reach1_FEC.pdf'),rchnm='R1')
+  
+    plot_gambill_compare_highQ_R1(
+        rchnm="R1",
+        dlvl="highQ",
+        outpath=os.path.join(figdir, "gambill_highQ_R1_compare.pdf"),
+        ec_inset=True,
+        ec_inset_xlim=(3.62, 3.82),
+        ec_inset_ylim=(14.8, 15.5),
+        # right side, vertically centered (tweak if needed)
+        ec_inset_bbox=(0.57, 0.34, 0.35, 0.32),
+        ec_inset_label="",
+    )
+    
+    plot_gambill_compare_highQ_R1(
+        rchnm="R1",
+        dlvl="lowQ",
+        outpath=os.path.join(figdir, "gambill_lowQ_R1_compare.pdf"),
+        ec_inset=True,
+        ec_inset_xlim=(3.62, 3.82),
+        ec_inset_ylim=(14.8, 15.5),
+        # right side, vertically centered (tweak if needed)
+        ec_inset_bbox=(0.57, 0.34, 0.35, 0.32),
+        ec_inset_label="zoom",
+    )

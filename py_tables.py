@@ -363,7 +363,7 @@ if __name__ == "__main__":
     # workspace:
     ws = os.path.join("known_kernels", "python_make")
     # noise type:
-    noise_type = 'on-in-after-conv'
+    noise_type = 'on-out'
     # combine results csvs:
     combine_knwn_kernel_csvs(ws=ws, noise_type=noise_type)
 
