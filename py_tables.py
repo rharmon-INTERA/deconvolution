@@ -3,24 +3,25 @@
 Generate LaTeX tables (2 per kernel = 6 total) from combined_results.csv.
 
 - Table Kernel Chars (per kernel): known kernel properties + estimated kernel properties
+    Columns:
+      Method | Added Noise | Correlation Time | Total Mass | Mean Travel Time | Spread of Travel Times
 - Table Stats (per kernel): performance metrics
-    (AddedNoise, RecoveredNoise, CorrelationTime, SolveTime, RMSE, L2)
+    Columns:
+      Method | Added Noise | Recovered Noise | Solve Time | RMSE | L2
+
+Noise-label + caption logic:
+- noise_type == 'on-out'
+    Added noise: sigma_y added to output signal (y)
+- noise_type == 'on-in-before-conv'
+    Added noise: sigma_{x^{*}} added to input signal (x*) before convolution
+- noise_type == 'on-in-after-conv'
+    Added noise: sigma_x added to the input signal only after generating the output
+                signal via convolution (i.e., noise added post-convolution)
 
 Notes:
-- "Noise Level"    -> Added Noise (sigma_y) shown in the tables
+- "Noise Level"    -> Added Noise shown in the tables (sigma symbol depends on noise_type)
 - "FinalSigma"     -> Recovered Noise shown in the tables
 - "SolveTime_min"  -> Solution time in minutes (added by deconvolution code)
-- "SolveTime_sec"  -> Optional; not displayed unless you modify this script
-- Truncated Linear method is skipped (not present in your CSV anyway)
-
-Outputs:
-  latex_tables/<noise_type>/
-    gamma_<noise_type>_kernel_results.tex
-    gamma_<noise_type>_performance_metrics.tex
-    chapeau_<noise_type>_kernel_results.tex
-    chapeau_<noise_type>_performance_metrics.tex
-    bimodal_<noise_type>_kernel_results.tex
-    bimodal_<noise_type>_performance_metrics.tex
 """
 
 from __future__ import annotations
@@ -78,10 +79,10 @@ def fmt_val(x: float, ndp: int = 3):
 
 
 def fmt_corr_time(x: float):
-    """Correlation time formatting (keep 2 decimals; drop trailing zeros)."""
-    if x is None or (isinstance(x, float) and math.isnan(x)):
+    """Correlation time formatting (keep 3 decimals; drop trailing zeros)."""
+    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return ""
-    s = f"{x:.2f}"
+    s = f"{x:.3f}"
     return s.rstrip("0").rstrip(".")
 
 
@@ -104,61 +105,112 @@ def latex_escape(s: str):
 
 
 # -----------------------------
+# NOISE TYPE HELPERS (HEADERS + CAPTIONS)
+# -----------------------------
+def noise_symbol(noise_type: str) -> str:
+    """
+    Return the LaTeX symbol for "Added Noise" for this noise_type.
+
+    - on-out            -> sigma_y
+    - on-in-before-conv -> sigma_{x^{*}}  (xstar)
+    - on-in-after-conv  -> sigma_x
+    """
+    if noise_type == "on-in-before-conv":
+        return r"\sigma_{\x^{\!*}}"
+    if noise_type == "on-in-after-conv":
+        return r"\sigma_{\x}"
+    return r"\sigma_{\y}"
+
+
+def added_noise_header(noise_type: str) -> str:
+    sym = noise_symbol(noise_type)
+    return rf"\multicolumn{{1}}{{c}}{{\small \shortstack{{Added\\Noise (${sym}$)}}}} &"
+
+
+def noise_caption_phrase(noise_type: str) -> str:
+    """
+    Caption phrase describing where noise is added.
+    """
+    if noise_type == "on-in-before-conv":
+        return rf"noise added to the input signal ($ {noise_symbol(noise_type)} $) before convolution"
+    if noise_type == "on-in-after-conv":
+        return rf"noise added to the input signal ($ {noise_symbol(noise_type)} $) only after generating the output signal with a convolution"
+    return rf"noise added to the output signal ($ {noise_symbol(noise_type)} $)"
+
+
+# -----------------------------
 # TABLE GENERATORS
 # -----------------------------
 def get_known_props(df_k: pd.DataFrame, kernel: str):
     """
-    Return (m0, m1, m2) known properties.
-    If not provided in KNOWN_KERNEL_PROPS, estimate from minimum Noise Level rows.
+    Return (corr_time, m0, m1, m2) known properties.
+    If m0, m1, m2 are not provided in KNOWN_KERNEL_PROPS, estimate from minimum Noise Level rows.
     """
     k = kernel.lower()
-    if k in {kk.lower(): kk for kk in KNOWN_KERNEL_PROPS}.keys():
-        for kk, vv in KNOWN_KERNEL_PROPS.items():
-            if kk.lower() == k:
-                return vv
 
-    min_noise = df_k["Noise Level"].min()
-    df_min = df_k.loc[df_k["Noise Level"] == min_noise]
-    m0 = float(df_min["Mass_m0"].mean())
-    m1 = float(df_min["MeanTravelTime_m1"].mean())
-    m2 = float(df_min["SpreadOfTravelTimes_m2"].mean())
-    return (m0, m1, m2)
+    known_corr = None
+    for kk, vv in KNOWN_CORR_TIMES.items():
+        if kk.lower() == k:
+            known_corr = vv
+            break
+
+    known_m = None
+    for kk, vv in KNOWN_KERNEL_PROPS.items():
+        if kk.lower() == k:
+            known_m = vv
+            break
+
+    if known_m is not None:
+        known_m0, known_m1, known_m2 = known_m
+    else:
+        min_noise = df_k["Noise Level"].min()
+        df_min = df_k.loc[df_k["Noise Level"] == min_noise]
+        known_m0 = float(df_min["Mass_m0"].mean())
+        known_m1 = float(df_min["MeanTravelTime_m1"].mean())
+        known_m2 = float(df_min["SpreadOfTravelTimes_m2"].mean())
+
+    return known_corr, known_m0, known_m1, known_m2
 
 
-def kernel_results_table(df_k: pd.DataFrame, kernel: str):
+def kernel_results_table(df_k: pd.DataFrame, kernel: str, noise_type: str):
     """
     LaTeX table: known kernel props + estimated props for each method and noise level.
 
-    - Correlation Time column removed from this table.
+    Columns:
+      Method | Added Noise | Correlation Time | Total Mass | Mean Travel Time | Spread of Travel Times
     """
     kernel_clean = latex_escape(kernel)
-    known_m0, known_m1, known_m2 = get_known_props(df_k, kernel)
+    known_ct, known_m0, known_m1, known_m2 = get_known_props(df_k, kernel)
 
     methods_present = [m for m in ["Cirpka", "Learn"] if m in df_k["Method"].unique()]
+
+    add_hdr = added_noise_header(noise_type)
 
     lines = []
     lines.append("%" * 46)
     lines.append(r"\renewcommand{\arraystretch}{1.0}")
     lines.append(r"\begin{table}[H]")
     lines.append(
-        rf"\caption{{Known {kernel_clean} kernel properties and estimated kernel properties with noise added to output signal ($ \y $)}}"
+        rf"\caption{{Known {kernel_clean} kernel properties and estimated kernel properties with {noise_caption_phrase(noise_type)}.}}"
     )
     lines.append(r"\centering")
     lines.append("")
     lines.append(r"\begin{tabular}{")
     lines.append(r">{\centering\arraybackslash}p{2.0cm} ")
     lines.append(r">{\centering\arraybackslash}p{1.2cm} ")
+    lines.append(r">{\centering\arraybackslash}p{1.5cm} ")
     lines.append(r">{\centering\arraybackslash}p{1.2cm} ")
     lines.append(r">{\centering\arraybackslash}p{1.5cm} ")
-    lines.append(r">{\centering\arraybackslash}p{1.5cm} ")
+    lines.append(r">{\centering\arraybackslash}p{1.6cm} ")
     lines.append(r"}")
 
     lines.append(
         r"\multicolumn{1}{c}{\small Method} & "
-        r"\multicolumn{1}{c}{\small \shortstack{Added\\Noise ($\sigma_\y$)}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{Total Mass\\ ($m_0$)}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{Mean Travel\\Time ($m_1$)}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{Spread of\\Travel Times ($m_2$)}} \\"
+        + add_hdr
+        + r" \multicolumn{1}{c}{\small \shortstack{Correlation\\Time (hr)}} & "
+        + r"\multicolumn{1}{c}{\small \shortstack{Total Mass\\($m_0$)}} & "
+        + r"\multicolumn{1}{c}{\small \shortstack{Mean Travel\\Time ($m_1$)}} & "
+        + r"\multicolumn{1}{c}{\small \shortstack{Spread of\\Travel Times ($m_2$)}} \\"
     )
 
     lines.append("")
@@ -166,11 +218,11 @@ def kernel_results_table(df_k: pd.DataFrame, kernel: str):
 
     lines.append(
         rf"\parbox[c]{{2.0cm}}{{\centering Known Kernel\\Properties:}} & -- & "
-        rf"{fmt_val(known_m0,3)} & {fmt_val(known_m1,3)} & {fmt_val(known_m2,3)} \\"
+        rf"{fmt_corr_time(known_ct)} & {fmt_val(known_m0,3)} & {fmt_val(known_m1,3)} & {fmt_val(known_m2,3)} \\"
     )
 
     lines.append(r"\midrule")
-    lines.append(r"\multicolumn{5}{c}{\textit{Estimated Kernels}} \\")
+    lines.append(r"\multicolumn{6}{c}{\textit{Estimated Kernels}} \\")
     lines.append(r"\midrule")
 
     for mi, method in enumerate(methods_present):
@@ -185,22 +237,23 @@ def kernel_results_table(df_k: pd.DataFrame, kernel: str):
         first = True
         for _, r in df_m.iterrows():
             add_noise = fmt_noise(float(r["Noise Level"]))
+            ct = fmt_corr_time(float(r["CorrelationTime"])/2) # correction for postive vs. negative correlation time definition
             m0 = fmt_val(float(r["Mass_m0"]), 3)
             m1 = fmt_val(float(r["MeanTravelTime_m1"]), 3)
             m2 = fmt_val(float(r["SpreadOfTravelTimes_m2"]), 3)
 
             if first:
                 lines.append(
-                    rf"\multirow{{{nrows}}}{{*}}{{{label}}} & {add_noise} & {m0} & {m1} & {m2} \\"
+                    rf"\multirow{{{nrows}}}{{*}}{{{label}}} & {add_noise} & {ct} & {m0} & {m1} & {m2} \\"
                 )
                 first = False
             else:
                 lines.append(
-                    rf"                        & {add_noise} & {m0} & {m1} & {m2} \\"
+                    rf"                        & {add_noise} & {ct} & {m0} & {m1} & {m2} \\"
                 )
 
         if mi < len(methods_present) - 1:
-            lines.append(r"\cmidrule(lr){2-5}")
+            lines.append(r"\cmidrule(lr){2-6}")
 
     lines.append(r"\hline")
     lines.append(r"\end{tabular}")
@@ -211,22 +264,24 @@ def kernel_results_table(df_k: pd.DataFrame, kernel: str):
     return "\n".join(lines)
 
 
-def performance_metrics_table(df_k: pd.DataFrame, kernel: str):
+def performance_metrics_table(df_k: pd.DataFrame, kernel: str, noise_type: str):
     """
     LaTeX table: metrics per method and noise level.
 
     Columns:
-      Method | AddedNoise | RecoveredNoise | CorrelationTime | SolveTime | RMSE | L2
+      Method | AddedNoise | RecoveredNoise | SolveTime | RMSE | L2
     """
     kernel_clean = latex_escape(kernel)
     methods_present = [m for m in ["Cirpka", "Learn"] if m in df_k["Method"].unique()]
+
+    add_hdr = added_noise_header(noise_type)
 
     lines = []
     lines.append("%" * 46)
     lines.append(r"\renewcommand{\arraystretch}{1.0}")
     lines.append(r"\begin{table}[H]")
     lines.append(
-        rf"\caption{{Performance metrics using the {kernel_clean} kernel with noise added to output signal ($ \y $)}}"
+        rf"\caption{{Performance metrics using the {kernel_clean} kernel with {noise_caption_phrase(noise_type)}.}}"
     )
     lines.append(r"\centering")
     lines.append("")
@@ -234,7 +289,6 @@ def performance_metrics_table(df_k: pd.DataFrame, kernel: str):
     lines.append(r">{\centering\arraybackslash}p{2.4cm} ")  # Method
     lines.append(r">{\centering\arraybackslash}p{1.3cm} ")  # Added noise
     lines.append(r">{\centering\arraybackslash}p{1.8cm} ")  # Recovered noise
-    lines.append(r">{\centering\arraybackslash}p{1.5cm} ")  # Corr time
     lines.append(r">{\centering\arraybackslash}p{1.5cm} ")  # Solve time
     lines.append(r">{\centering\arraybackslash}p{1.6cm} ")  # RMSE
     lines.append(r">{\centering\arraybackslash}p{1.4cm} ")  # L2
@@ -242,12 +296,11 @@ def performance_metrics_table(df_k: pd.DataFrame, kernel: str):
 
     lines.append(
         r"\small Method &"
-        r"\multicolumn{1}{c}{\small \shortstack{Added\\Noise ($\sigma_\y$)}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{Recovered\\Noise}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{Correlation\\Time (hr)}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{Solve\\Time (min)}} &"
-        r"\multicolumn{1}{c}{\small \shortstack{RMSE\\($\X\bar\g$, $\y$)}} &"
-        r"\small $L^2$ ($\bar\g,\k$) \\"
+        + add_hdr
+        + r" \multicolumn{1}{c}{\small \shortstack{Recovered\\Noise}} &"
+        + r"\multicolumn{1}{c}{\small \shortstack{Solve\\Time (min)}} &"
+        + r"\multicolumn{1}{c}{\small \shortstack{RMSE\\($\X\bar\g$, $\y$)}} &"
+        + r"\small $L^2$ ($\bar\g,\k$) \\"
     )
     lines.append("")
     lines.append(r"\hline")
@@ -265,20 +318,23 @@ def performance_metrics_table(df_k: pd.DataFrame, kernel: str):
         for _, r in df_m.iterrows():
             add_noise = fmt_noise(float(r["Noise Level"]))
             rec_noise = fmt_val(float(r["FinalSigma"]), 3)
-            ct = fmt_corr_time(float(r["CorrelationTime"]))
-            st = fmt_solve_time_min(float(r["SolveTime_min"])) if "SolveTime_min" in df_m.columns else ""
+            st = (
+                fmt_solve_time_min(float(r["SolveTime_min"]))
+                if "SolveTime_min" in df_m.columns
+                else ""
+            )
             rmse = fmt_val(float(r["RMSE"]), 4)
             l2 = fmt_val(float(r["L2"]), 4)
 
             if first:
                 lines.append(rf"\multirow{{{nrows}}}{{*}}{{{label}}}")
                 lines.append(
-                    rf"    & {add_noise} & {rec_noise} & {ct} & {st} & {rmse} & {l2} \\"
+                    rf"    & {add_noise} & {rec_noise} & {st} & {rmse} & {l2} \\"
                 )
                 first = False
             else:
                 lines.append(
-                    rf"    & {add_noise} & {rec_noise} & {ct} & {st} & {rmse} & {l2} \\"
+                    rf"    & {add_noise} & {rec_noise} & {st} & {rmse} & {l2} \\"
                 )
 
         lines.append(r"\hline")
@@ -344,11 +400,13 @@ def main():
         if df_k.empty:
             continue
 
-        tex1 = kernel_results_table(df_k, kernel)
-        tex2 = performance_metrics_table(df_k, kernel)
+        tex1 = kernel_results_table(df_k, kernel, noise_type=noise_type)
+        tex2 = performance_metrics_table(df_k, kernel, noise_type=noise_type)
 
         out1 = os.path.join(OUTDIR, f"{kernel.lower()}_{noise_type}_kernel_results.tex")
-        out2 = os.path.join(OUTDIR, f"{kernel.lower()}_{noise_type}_performance_metrics.tex")
+        out2 = os.path.join(
+            OUTDIR, f"{kernel.lower()}_{noise_type}_performance_metrics.tex"
+        )
 
         with open(out1, "w", encoding="utf-8") as f:
             f.write(tex1)
@@ -362,29 +420,39 @@ def main():
 if __name__ == "__main__":
     # workspace:
     ws = os.path.join("known_kernels", "python_make")
-    # noise type:
-    noise_type = 'on-out'
-    # combine results csvs:
-    combine_knwn_kernel_csvs(ws=ws, noise_type=noise_type)
 
-    CSV_PATH = os.path.join(ws, "combined_results.csv")
-    OUTDIR = os.path.join(ws, "latex_tables", noise_type)
+    # noise types:
+    noise_types = ["on-out", "on-in-before-conv", "on-in-after-conv"]
+    
+    for noise_type in noise_types:
+        # combine results csvs:
+        combine_knwn_kernel_csvs(ws=ws, noise_type=noise_type)
 
-    # ***HARD coded known kernel props:
-    KNOWN_KERNEL_PROPS: Dict[str, Tuple[float, float, float]] = {
-        "gamma": (1.0, 6.0, 12.0),
-        "chapeau": (1.0, 2.5, 1.2),
-        "bimodal": (1.0, 12.63, 22.95),
-    }
+        CSV_PATH = os.path.join(ws, "combined_results.csv")
+        OUTDIR = os.path.join(ws, "latex_tables", noise_type)
 
-    # how to display method names in LaTeX
-    METHOD_LABELS = {
-        "Cirpka": r"\shortstack{Modified\\Cirpka}",
-        "Learn": r"Learn",
-    }
+        # ***HARD coded known kernel props:
+        KNOWN_KERNEL_PROPS: Dict[str, Tuple[float, float, float]] = {
+            "gamma": (1.0, 6.0, 12.0),
+            "chapeau": (1.0, 2.5, 1.2),
+            "bimodal": (1.0, 12.63, 22.95),
+        }
 
-    # kernels to generate tables for (if None, infer from CSV unique values)
-    KERNELS: Optional[list[str]] = None
+        # ***HARD coded known correlation times (hr):
+        KNOWN_CORR_TIMES: Dict[str, float] = {
+            "chapeau": 1.924,
+            "gamma": 5.383,
+            "bimodal": 7.68,
+        }
 
-    # generate latex tables:
-    main()
+        # how to display method names in LaTeX
+        METHOD_LABELS = {
+            "Cirpka": r"\shortstack{Modified\\Cirpka}",
+            "Learn": r"Learn",
+        }
+
+        # kernels to generate tables for (if None, infer from CSV unique values)
+        KERNELS: Optional[list[str]] = None
+
+        # generate latex tables:
+        main()

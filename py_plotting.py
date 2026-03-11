@@ -10,7 +10,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-%matplotlib widget
+#%matplotlib widget
 
 
 def set_graph_specifications():
@@ -130,7 +130,7 @@ def plot_deconv_results(results_dir, noise_type='on-out',inset_on=False):
     """
     kernel_types = ['chapeau', 'gamma', 'bimodal']
     method_keys = ['cirpka' ,'learn']  # substrings in filenames
-    methods = ['Modified Cirpka' ,'Machine Learning']  # labels
+    methods = ['Modified Cirpka' ,'COV-Learn']  # labels
 
     xmx = [10, 25,30] # x axis maximums ordered by kernel_types
 
@@ -141,9 +141,9 @@ def plot_deconv_results(results_dir, noise_type='on-out',inset_on=False):
     if noise_type == 'on-out':
         noise_sub = 'y'
     elif noise_type == 'on-in-before-conv':
-        noise_sub = 'x'
+        noise_sub = r'x^{\ast}'
     elif noise_type == 'on-in-after-conv':
-        noise_sub = r'x^{\ast}'  
+        noise_sub =  'x' 
     
     if not inset_on:
         pdf_path = os.path.join(save_dir, f'deconv_results_noise_{noise_type}.pdf')
@@ -178,11 +178,12 @@ def plot_deconv_results(results_dir, noise_type='on-out',inset_on=False):
                         ax.tick_params(axis='both', which='both', direction='in', length=3, width=1, colors='black', top=True, right=True)
                         
                         if i == 0 and i <= len(noise_lvls)-1:
-                            ax.set_title(f'$\sigma_{noise_sub}$ = {noise}',fontsize=10)
+                            ax.set_title(f'$\sigma_{noise_sub}$ = {noise}',fontsize=12)
 
                         if j == 0:
                             ax.set_ylabel(f"{mlabel}\n$k(t)$ [1/hr]")
-
+                        if i == len(methods)-1:
+                            ax.set_xlabel('Time lag [hr]')
                         # if i == 0 and j == len(noise_lvls)-1:
                         #     ax.legend(loc='upper right',fontsize=8)
                         
@@ -220,7 +221,7 @@ def plot_deconv_results(results_dir, noise_type='on-out',inset_on=False):
                             fig.legend(
                                 handles, labels,
                                 loc='lower center',
-                                bbox_to_anchor=(0.5, 0.01),
+                                bbox_to_anchor=(0.5, -0.005),
                                 ncol=max(1, len(handles)),   # one row
                                 fontsize=9,
                                 frameon=True
@@ -422,7 +423,8 @@ def plot_gambill(ws='.',rchnm='R2',dlvl='medQ',axes_pair=None,leg=False):
 
     ax.set_xlim(0,0.501)
     ax.set_ylim(0,20)
-    
+    if dlvl == 'highQ':
+        ax.set_xlabel('Time lag [hr]')
     if dlvl != 'highQ':
         ax.set_xticklabels([])
     
@@ -458,6 +460,8 @@ def plot_gambill(ws='.',rchnm='R2',dlvl='medQ',axes_pair=None,leg=False):
         ax.set_ylabel('Bulk fluid electrical \nconductivity [$\\mu$S/cm]')
     else:
         ax.set_ylabel('Fluid electrical \nconductivity [$\\mu$S/cm]')
+    if dlvl == 'highQ':
+        ax.set_xlabel('Time lag [hr]')
     ax.set_ylim(0,60)
     ax.set_xlim(0,15)
     ax.grid(True,alpha=0.5)
@@ -807,6 +811,112 @@ def plot_gambill_compare_highQ_R1(
 
     return fig, (ax_a, ax_b, ax_c)
 
+
+def plot_estimated_covariance_by_kernel(
+    results_dir,
+    kernel='gamma',
+    noise_type='on-out',
+    noise_level='0.030',
+    outname=None,
+    use_abs=True
+):
+    """
+    Plot estimated covariance for a single kernel, with both
+    Modified Cirpka and COV-Learn overlaid on the same axes.
+
+    Parameters
+    ----------
+    results_dir : str
+        Base results directory, e.g. 'known_kernels/python_make'
+    kernel : str
+        'chapeau', 'gamma', or 'bimodal'
+    noise_type : str
+        One of 'on-out', 'on-in-before-conv', 'on-in-after-conv'
+    noise_level : str
+        Noise level string as used in filenames, e.g. '0.030'
+    outname : str or None
+        Optional output filename. If None, a default is used.
+    use_abs : bool
+        If True, plot abs(covariance) so semilogy works even if values
+        are slightly negative from numerical noise.
+    """
+    method_keys = ['cirpka', 'learn']
+    method_labels = ['Modified Cirpka', 'COV-Learn']
+    method_styles = {
+        'cirpka': {'color': 'grey', 'linestyle': '--', 'linewidth': 1.25},
+        'learn':  {'color': 'navy', 'linestyle': '-',  'linewidth': 1.25},
+    }
+
+    save_dir = os.path.join(results_dir, 'figs')
+    os.makedirs(save_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(1, 1, figsize=(4.5, 3.5))
+
+    rdir = os.path.join(results_dir, kernel, 'outputs', noise_type)
+
+    for mkey, mlabel in zip(method_keys, method_labels):
+        pattern = os.path.join(
+            rdir,
+            f'noise_added_{noise_level}',
+            f'{mkey}_{kernel}_{noise_type}_{noise_level}_{mkey}_covariance.csv'
+        )
+        matches = glob.glob(pattern)
+
+        if not matches:
+            print(f'Could not find covariance file for {kernel}, {mkey}: {pattern}')
+            continue
+
+        cov_df = pd.read_csv(matches[0])
+
+        if 'lag_time' not in cov_df.columns or 'covariance' not in cov_df.columns:
+            print(f"Missing required columns in {matches[0]}")
+            continue
+
+        x = cov_df['lag_time'].values
+        y = cov_df['covariance'].values
+
+        if use_abs:
+            y = np.abs(y)
+
+        y = np.maximum(y, 1e-12)
+
+        ax.semilogy(
+            x, y,
+            label=mlabel,
+            **method_styles[mkey]
+        )
+
+    ax.set_xlabel('Time lag [hr]')
+    ax.set_ylabel('Estimated covariance [1/hr$^2$]')
+    ax.set_title(f'Known {kernel.capitalize()} kernel', fontsize=10)
+    ax.grid(True, which='both', alpha=0.4)
+    ax.minorticks_on()
+
+    ax.tick_params(axis='both', which='both', length=0)
+    ax.tick_params(axis='both', which='major',
+                   direction='in', length=6, width=1,
+                   top=True, bottom=True, left=True, right=True)
+    ax.tick_params(axis='both', which='minor',
+                   direction='in', length=3, width=0.8,
+                   top=True, bottom=True, left=True, right=True)
+
+    ax.legend(loc='best', frameon=True)
+
+    fig.tight_layout()
+
+    if outname is None:
+        outname = f'estimated_covariance_{kernel}_{noise_type}_{noise_level}.pdf'
+
+    outpath_pdf = os.path.join(save_dir, outname)
+    outpath_png = outpath_pdf.replace('.pdf', '.png')
+
+    fig.savefig(outpath_pdf, dpi=300, bbox_inches='tight')
+    fig.savefig(outpath_png, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Saved covariance plot to {outpath_pdf}")
+
+
 if __name__ == "__main__":
     set_graph_specifications()
     figdir = os.path.join('known_kernels','python_make','figs_known_kernels')
@@ -815,12 +925,14 @@ if __name__ == "__main__":
     
     results_dir = os.path.join('known_kernels','python_make')
     plot_deconv_results(results_dir, noise_type='on-out',inset_on=False)
+    plot_deconv_results(results_dir, noise_type='on-in-before-conv',inset_on=False)
+    plot_deconv_results(results_dir, noise_type='on-in-after-conv',inset_on=False)
     
     figdir = os.path.join('field_studies','gambill','python_make','gambill_figs')
     if not os.path.exists(figdir):
          os.makedirs(figdir)
-    #plot_reach(pdf_nm=os.path.join(figdir,'reach2_FEC.pdf'),rchnm='R2')
-    #plot_reach(pdf_nm=os.path.join(figdir,'reach1_FEC.pdf'),rchnm='R1')
+    plot_reach(pdf_nm=os.path.join(figdir,'reach2_FEC.pdf'),rchnm='R2')
+    plot_reach(pdf_nm=os.path.join(figdir,'reach1_FEC.pdf'),rchnm='R1')
   
     plot_gambill_compare_highQ_R1(
         rchnm="R1",
@@ -845,3 +957,25 @@ if __name__ == "__main__":
         ec_inset_bbox=(0.57, 0.34, 0.35, 0.32),
         ec_inset_label="zoom",
     )
+    
+    plot_estimated_covariance_by_kernel(
+        results_dir=os.path.join('known_kernels', 'python_make'),
+        kernel='chapeau',
+        noise_type='on-out',
+        noise_level='0.030'
+    )
+
+    plot_estimated_covariance_by_kernel(
+        results_dir=os.path.join('known_kernels', 'python_make'),
+        kernel='gamma',
+        noise_type='on-out',
+        noise_level='0.030'
+    )
+
+    plot_estimated_covariance_by_kernel(
+        results_dir=os.path.join('known_kernels', 'python_make'),
+        kernel='bimodal',
+        noise_type='on-out',
+        noise_level='0.030'
+    )
+        
