@@ -6,9 +6,9 @@
 
 ## Time-Domain Deconvolution for Estimating Hydrologic Transfer Functions
 
-This repository contains the complete workflow, Python environment, and datasets used to develop, test, and apply an improved time-domain deconvolution method for estimating transfer functions in hydrologic systems.
+This repository contains the complete workflow, python environment, and datasets used to develop, test, and apply an improved time-domain deconvolution method for estimating transfer functions in hydrologic systems.
 
-Deconvolution recovers how a tracer signal is transformed as it travels from an upstream input location to a downstream output location. Traditional approaches assume a fixed covariance structure for the transfer function — typically linear — which constrains the recovered kernels, especially under high noise. The method implemented here removes that assumption by solving for the actual autocovariance directly from the data, and adds a learned covariance estimator that improves the covariance at each iteration. The result is more robust and more stable across both synthetic and field datasets, with error bounds on the recovered kernels.
+Deconvolution recovers how a tracer signal is transformed as it travels from an upstream input location to a downstream output location. Traditional approaches assume a fixed covariance structure for the transfer function (often linear) which constrains the recovered kernels, especially under high noise. The method implemented here removes that assumption by solving for the actual autocovariance directly from the data, and adds a learned covariance estimator that improves the covariance at each iteration. The result is more robust and more stable across both synthetic and field datasets, with error bounds on the recovered kernels.
 
 <br>
 
@@ -16,7 +16,7 @@ Deconvolution recovers how a tracer signal is transformed as it travels from an 
 
 | Path | Description |
 | --- | --- |
-| [`deconv_parallel.py`](deconv_parallel.py) | Main driver — the deconvolution solver and the run configuration for every case in the manuscript |
+| [`deconv_parallel.py`](deconv_parallel.py) | Main script — the deconvolution solver and the run configuration for every case in the manuscript |
 | [`py_plotting.py`](py_plotting.py) | All figure generation (kernel comparisons, input/output time series, covariance plots) |
 | [`py_tables.py`](py_tables.py) | LaTeX tables and single-PDF table summaries per noise type |
 | [`make_appendix_ng_fig.py`](make_appendix_ng_fig.py) | Appendix figure: sensitivity of each method to the chosen kernel length |
