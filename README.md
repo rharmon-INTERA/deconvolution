@@ -1,70 +1,131 @@
+<p align="center">
+  <img src="documentation/deconv_banner.png" alt="Time-domain deconvolution for hydrologic transfer functions">
+</p>
+
 # Deconvolution
------------------------------------------------
+
+## Time-Domain Deconvolution for Estimating Hydrologic Transfer Functions
+
 This repository contains the complete workflow, Python environment, and datasets used to develop, test, and apply an improved time-domain deconvolution method for estimating transfer functions in hydrologic systems.
 
-In simple terms, deconvolution attempts to recover how a tracer signal is transformed as it travels from an upstream input location to a downstream output location. Traditional approaches often assume a fixed covariance structure for (i.e, a linear covariance structure), which can constrain the recovered kernels—especially under high noise conditions.
+Deconvolution recovers how a tracer signal is transformed as it travels from an upstream input location to a downstream output location. Traditional approaches assume a fixed covariance structure for the transfer function — typically linear — which constrains the recovered kernels, especially under high noise. The method implemented here removes that assumption by solving for the actual autocovariance directly from the data, and adds a learned covariance estimator that improves the covariance at each iteration. The result is more robust and more stable across both synthetic and field datasets, with error bounds on the recovered kernels.
 
-The method implemented here removes that assumption by directly solving for the actual autocovariance from the data. It also incorporates a machine-learning–based covariance estimator to improve the estimated covariance upon each iteration. The new method also allows for added error bounds on the recovered kernels. Together, these improvements make the deconvolution method more robust and more stable across both synthetic and field datasets.
+<br>
 
-The repository includes the following key directories:
+## Contents
 
-known_kernels/ — Contains the chapeau, gamma, and bimodal kernels used for synthetic testing and validation of the improved method.
+| Path | Description |
+| --- | --- |
+| [`deconv_parallel.py`](deconv_parallel.py) | Main driver — the deconvolution solver and the run configuration for every case in the manuscript |
+| [`py_plotting.py`](py_plotting.py) | All figure generation (kernel comparisons, input/output time series, covariance plots) |
+| [`py_tables.py`](py_tables.py) | LaTeX tables and single-PDF table summaries per noise type |
+| [`make_appendix_ng_fig.py`](make_appendix_ng_fig.py) | Appendix figure: sensitivity of each method to the chosen kernel length |
+| [`known_kernels/`](known_kernels/) | Chapeau, gamma, and bimodal kernels used for synthetic testing and validation |
+| [`field_studies/`](field_studies/) | Input data and results for the Gambill et al. (2025) field dataset |
+| [`deconv_env.yml`](deconv_env.yml) | Conda/mamba environment specification |
 
-field_studies/ — Contains input data results from applying the machine-learning approach to the Gambill et al. (2025) field dataset.
+<br>
 
-## Getting Started with Python
------------------------------------------------
-The Python workflow was used to generate every figure and table in Harmon et al. (YYYY). We validated the Python implementation of the improved deconvolution method by comparing it against the original MATLAB version using the synthetic test cases from the manuscript. Both implementations recovered nearly identical transfer functions and error bounds. Minor deviations between the two are expected and stem primarily from (i) the inability to enforce identical random number seeds for generating synthetic noise across platforms, and (ii) subtle numerical differences between SciPy and MATLAB’s optimization and linear-algebra routines.
-### Installing Python Dependencies with Conda or Mamba
-There are several options for installing the Python environments needed to run the workflow:
+## Methods
 
-Anaconda Distribution (https://www.anaconda.com/download)
-Full installation with many scientific packages included by default that are not relevant to this workflow.
+Three covariance treatments are implemented and compared:
 
-Miniconda (https://docs.anaconda.com/miniconda/)
-A minimal installer used to create custom Python environments.
+* **COV-Learn** — learns the transfer-function covariance directly from the data, updating the empirical autocovariance of the kernel at every outer iteration. No assumed covariance shape.
 
-Mambaforge (https://github.com/conda-forge/miniforge#mambaforge)
-A lightweight installer preconfigured to use the faster Mamba solver and the conda-forge channel.
-Recommended — it is open-source, avoids Anaconda’s new potentital paywall adds, uses fewer resources, and solves environments faster.
+* **Modified Cirpka** — a corrected form of the classical linear-variogram approach. The prior slope is estimated by maximum likelihood over only the non-zero kernel entries, which makes the estimate independent of the user's choice of kernel length.
 
-Once one of these is installed, create the environment using the provided file deconv_env.yml.
+* **Linear** — the classical fixed linear covariance structure, retained for comparison.
 
-Using mamba (recommended):
+All methods enforce non-negativity of the transfer function through Lagrange multipliers and produce conditional realizations for uncertainty bounds.
+
+<br>
+
+## Getting Started
+
+### Installing the Python environment
+
+Any conda-compatible installer works. [Miniforge](https://github.com/conda-forge/miniforge) is recommended — it is open source, preconfigured for conda-forge, and uses the faster mamba solver.
 
 ```bash
-	$ mamba env create -f deconv_env.yml
-	$ mamba activate deconv
+mamba env create -f deconv_env.yml
+mamba activate deconv_py311
 ```
- 
+
+or with conda:
+
 ```bash
-	$ conda env create -f deconv_env.yml
-	$ conda activate deconv
+conda env create -f deconv_env.yml
+conda activate deconv_py311
 ```
-    
-## Python Scripts
 
-###deconv_parallel.py
+### Running the workflow
 
-This is the main driver script for the workflow. It handles:
-- Serial execution of deconvoltion method
-- Parallel execution of the deconvolution method
+```bash
+python deconv_parallel.py
+```
 
+Case selection is controlled by the flags at the top of the `__main__` block in [`deconv_parallel.py`](deconv_parallel.py):
 
-###py_plotting.py
+```python
+run_knwn_kernels = True     # synthetic chapeau / gamma / bimodal cases
+run_gambill      = False    # Gambill et al. (2025) field data
+noise_type       = 'on-out' # 'on-out', 'on-in-before-conv', or 'on-in-after-conv'
+run_in_parallel  = False    # multiprocess the conditional realizations
+plot_figs        = True
+```
 
-Contains all plotting functions used throughout the workflow, including:
+Then generate the tables:
 
-- Kernel comparison plots
+```bash
+python py_tables.py
+```
 
-- Input/output time-series figures
+<br>
 
-- Generation of latex tables
+## Outputs
 
-Figures for the known kernels that are shown in Harmon et al. (YYYY) are saved to ./deconvolution/known_kernels/python_make/figs, tables are saved to deconvolution/known_kernels/python_make/tables
+| Output | Location |
+| --- | --- |
+| Known-kernel figures | `known_kernels/python_make/figs_known_kernels/` |
+| Known-kernel results and stats | `known_kernels/python_make/<kernel>/outputs/<noise_type>/` |
+| LaTeX tables and PDF summaries | `known_kernels/python_make/latex_tables/<noise_type>/` |
+| Gambill field figures | `field_studies/gambill/python_make/gambill_figs/` |
+| Gambill results and stats | `field_studies/gambill/python_make/outputs/` |
 
-Figures of the Gambill et al. (2025) are located in ./deconvolution/field_studies/gambill/python_make/gambill_figs
+<br>
 
-## Getting Started with MATLAB
------------------------------------------------
-The MATLAB version of the repo is significantly less automated. There is a stand alone script to run each of known transfer function examples under the varying degrees of noise. There are also standalone scripts to run each of the Gambill et al. (2025) input and output tracer pairs. While the Matlab scripts do not contain the functions to generate figures and tables seen in the report, all relevant results are still saved to ".csv" and/or ".mat" files. The MATLAB scripts also include active plotting, that plot results at each sub-iteration within the deconvolution method. A lot can be learned about your problem by watching the improvement or derailing of your solution as you step through these sub-iterations.  
+## Notes on Parallel Execution
+
+Setting `run_in_parallel = True` distributes the conditional realizations across processes. The solver pins BLAS to a single thread per worker, because the numerical libraries beneath NumPy and SciPy are already multithreaded — without this, workers oversubscribe the machine and forking a live BLAS thread pool can deadlock. `threadpoolctl` (included in the environment file) enforces this at runtime, which matters when the module is imported after NumPy, such as in a Jupyter session.
+
+Each realization draws from its own independent random stream, so serial and parallel runs are statistically equivalent.
+
+<br>
+
+## MATLAB Implementation
+
+The original MATLAB implementation of this method is maintained separately:
+
+**https://github.com/**<!-- TODO: replace with the professor's repository URL -->
+
+The MATLAB version is less automated — standalone scripts run each known transfer function example and each Gambill input/output tracer pair, and results are written to `.csv` and `.mat` files rather than plotted into manuscript figures. It does include live plotting at every sub-iteration of the solver, which is worth watching: a lot can be learned about a problem by observing the solution improve or derail as it steps through the sub-iterations.
+
+<br>
+
+## Validation
+
+The Python implementation was validated against the MATLAB version using the synthetic test cases from the manuscript and the Gambill highQ_R1 field case. With matched settings the two recover effectively identical transfer functions, converged variogram slopes, and error bounds. Residual differences are expected and come from (i) the inability to enforce identical random seeds across platforms and (ii) small numerical differences between the SciPy and MATLAB optimization and linear-algebra routines.
+
+<br>
+
+## References
+
+Harmon, R., Benson, D., and others (in preparation). *Improved time-domain deconvolution for hydrologic transfer functions.*
+
+Gambill, D., and others (2025). *Field tracer dataset.*
+
+<br>
+
+## Citation
+
+If you use this code, please cite the manuscript above and this repository.
