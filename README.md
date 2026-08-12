@@ -2,8 +2,6 @@
   <img src="documentation/deconv_banner.png" alt="Time-domain deconvolution for hydrologic transfer functions">
 </p>
 
-# Deconvolution
-
 ## Time-Domain Deconvolution for Estimating Hydrologic Transfer Functions
 
 This repository contains the complete workflow, python environment, and datasets used to develop, test, and apply an improved time-domain deconvolution method for estimating transfer functions in hydrologic systems.
@@ -94,13 +92,6 @@ python py_tables.py
 
 <br>
 
-## Notes on Parallel Execution
-
-Setting `run_in_parallel = True` distributes the conditional realizations across processes. The solver pins BLAS to a single thread per worker, because the numerical libraries beneath NumPy and SciPy are already multithreaded — without this, workers oversubscribe the machine and forking a live BLAS thread pool can deadlock. `threadpoolctl` (included in the environment file) enforces this at runtime, which matters when the module is imported after NumPy, such as in a Jupyter session.
-
-Each realization draws from its own independent random stream, so serial and parallel runs are statistically equivalent.
-
-<br>
 
 ## MATLAB Implementation
 
@@ -116,13 +107,6 @@ The MATLAB version is less automated — standalone scripts run each known trans
 
 The Python implementation was validated against the MATLAB version using the synthetic test cases from the manuscript and the Gambill highQ_R1 field case. With matched settings the two recover effectively identical transfer functions, converged variogram slopes, and error bounds. Residual differences are expected and come from (i) the inability to enforce identical random seeds across platforms and (ii) small numerical differences between the SciPy and MATLAB optimization and linear-algebra routines.
 
-<br>
-
-## References
-
-Harmon, R., Benson, D., and others (in preparation). *Improved time-domain deconvolution for hydrologic transfer functions.*
-
-Gambill, D., and others (2025). *Field tracer dataset.*
 
 <br>
 
