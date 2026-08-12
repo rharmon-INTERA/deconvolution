@@ -13,7 +13,8 @@ dependencies:
   - xlrd
   - jupyter 
   - notebook 
-  - scipy 
+  - scipy
+  - threadpoolctl
   - rtree
   - git
   - nbconvert

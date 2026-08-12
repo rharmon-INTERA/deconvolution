@@ -29,11 +29,15 @@ from __future__ import annotations
 import os
 import math
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from typing import Dict, Tuple, Optional
 
 
 # ---------------------------------------------
-# Accumulate known kernel results into one csv:
+# Accum known kernel results into one csv:
 # ---------------------------------------------
 def combine_knwn_kernel_csvs(ws: str = ".", noise_type: str = "on-out"):
     curdir = os.getcwd()
@@ -62,7 +66,7 @@ def combine_knwn_kernel_csvs(ws: str = ".", noise_type: str = "on-out"):
 
 
 # -----------------------------
-# FORMATTING HELPERS
+#  Formats
 # -----------------------------
 def fmt_noise(x: float):
     """Format noise levels as in your examples (0.005 -> 0.005, 0.03 -> 0.03)."""
@@ -105,7 +109,7 @@ def latex_escape(s: str):
 
 
 # -----------------------------
-# NOISE TYPE HELPERS (HEADERS + CAPTIONS)
+# Noise types
 # -----------------------------
 def noise_symbol(noise_type: str) -> str:
     """
@@ -139,7 +143,7 @@ def noise_caption_phrase(noise_type: str) -> str:
 
 
 # -----------------------------
-# TABLE GENERATORS
+# Table gens
 # -----------------------------
 def get_known_props(df_k: pd.DataFrame, kernel: str):
     """
@@ -237,7 +241,7 @@ def kernel_results_table(df_k: pd.DataFrame, kernel: str, noise_type: str):
         first = True
         for _, r in df_m.iterrows():
             add_noise = fmt_noise(float(r["Noise Level"]))
-            ct = fmt_corr_time(float(r["CorrelationTime"])/2) # correction for postive vs. negative correlation time definition
+            ct = fmt_corr_time(float(r["CorrelationTime"])/2)
             m0 = fmt_val(float(r["Mass_m0"]), 3)
             m1 = fmt_val(float(r["MeanTravelTime_m1"]), 3)
             m2 = fmt_val(float(r["SpreadOfTravelTimes_m2"]), 3)
@@ -348,13 +352,139 @@ def performance_metrics_table(df_k: pd.DataFrame, kernel: str, noise_type: str):
 
 
 # -----------------------------
-# MAIN
+# PDF RENDER (same content as the .tex tables, no LaTeX toolchain needed)
 # -----------------------------
+def noise_symbol_mathtext(noise_type: str) -> str:
+    """Mathtext version of noise_symbol() for matplotlib rendering."""
+    if noise_type == "on-in-before-conv":
+        return r"$\sigma_{x^*}$"
+    if noise_type == "on-in-after-conv":
+        return r"$\sigma_x$"
+    return r"$\sigma_y$"
+
+
+def noise_caption_plain(noise_type: str) -> str:
+    """Plain-text caption phrase (mirrors noise_caption_phrase)."""
+    sym = noise_symbol_mathtext(noise_type)
+    if noise_type == "on-in-before-conv":
+        return f"noise added to the input signal ({sym}) before convolution"
+    if noise_type == "on-in-after-conv":
+        return (f"noise added to the input signal ({sym}) only after generating "
+                "the output signal with a convolution")
+    return f"noise added to the output signal ({sym})"
+
+
+def _method_label_plain(method: str) -> str:
+    return {"Cirpka": "Modified Cirpka", "Learn": "Learn"}.get(method, method)
+
+
+def kernel_results_rows(df_k: pd.DataFrame, kernel: str):
+    """Row data for the kernel-properties table (mirrors kernel_results_table)."""
+    known_ct, known_m0, known_m1, known_m2 = get_known_props(df_k, kernel)
+    rows = [["Known Kernel Properties", "--", fmt_corr_time(known_ct),
+             fmt_val(known_m0, 3), fmt_val(known_m1, 3), fmt_val(known_m2, 3)]]
+    for method in [m for m in ["Cirpka", "Learn"] if m in df_k["Method"].unique()]:
+        df_m = df_k.loc[df_k["Method"] == method].sort_values("Noise Level")
+        for i, (_, r) in enumerate(df_m.iterrows()):
+            rows.append([
+                _method_label_plain(method) if i == 0 else "",
+                fmt_noise(float(r["Noise Level"])),
+                fmt_corr_time(float(r["CorrelationTime"]) / 2),
+                fmt_val(float(r["Mass_m0"]), 3),
+                fmt_val(float(r["MeanTravelTime_m1"]), 3),
+                fmt_val(float(r["SpreadOfTravelTimes_m2"]), 3),
+            ])
+    return rows
+
+
+def performance_rows(df_k: pd.DataFrame):
+    """Row data for the performance table (mirrors performance_metrics_table)."""
+    rows = []
+    for method in [m for m in ["Cirpka", "Learn"] if m in df_k["Method"].unique()]:
+        df_m = df_k.loc[df_k["Method"] == method].sort_values("Noise Level")
+        for i, (_, r) in enumerate(df_m.iterrows()):
+            st = fmt_solve_time_min(float(r["SolveTime_min"])) \
+                if "SolveTime_min" in df_m.columns else ""
+            rows.append([
+                _method_label_plain(method) if i == 0 else "",
+                fmt_noise(float(r["Noise Level"])),
+                fmt_val(float(r["FinalSigma"]), 3),
+                st,
+                fmt_val(float(r["RMSE"]), 4),
+                fmt_val(float(r["L2"]), 4),
+            ])
+    return rows
+
+
+def _draw_table(ax, col_labels, rows, title, hline_after=None):
+    """Render one table onto an axis, styled to read like the LaTeX version."""
+    ax.axis("off")
+    ax.set_title(title, fontsize=9, loc="left", pad=14, wrap=True)
+    tbl = ax.table(cellText=rows, colLabels=col_labels, cellLoc="center", loc="upper center")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8)
+    tbl.scale(1.0, 1.45)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_linewidth(0.0)
+        if r == 0:                                  # header
+            cell.set_text_props(weight="bold")
+            cell.visible_edges = "B"
+            cell.set_linewidth(1.0)
+        elif hline_after and r in hline_after:      # rule under a group
+            cell.visible_edges = "B"
+            cell.set_linewidth(0.6)
+        if r == len(rows):                          # bottom rule
+            cell.visible_edges = ("B" if cell.visible_edges == "" else "B")
+            cell.set_linewidth(1.0)
+        if c == 0 and r > 0:
+            cell.set_text_props(ha="left")
+            cell._loc = "left"
+    return tbl
+
+
+def write_tables_pdf(df, kernels, noise_type: str, outpath: str):
+    """Write ALL tables for one noise type into a single multi-page PDF
+    (one page per kernel: kernel properties on top, performance below)."""
+    sym = noise_symbol_mathtext(noise_type)
+    cols_kr = ["Method", f"Added\nNoise ({sym})", "Correlation\nTime (hr)",
+               "Total Mass\n($m_0$)", "Mean Travel\nTime ($m_1$)",
+               "Spread of\nTravel Times ($m_2$)"]
+    cols_pm = ["Method", f"Added\nNoise ({sym})", "Recovered\nNoise",
+               "Solve\nTime (min)", "RMSE\n($Xg$, $y$)", "$L^2$ ($g$, $k$)"]
+
+    with PdfPages(outpath) as pdf:
+        for kernel in kernels:
+            df_k = df[df["Known Kernel"] == kernel].copy()
+            if df_k.empty:
+                continue
+            rows_kr = kernel_results_rows(df_k, kernel)
+            rows_pm = performance_rows(df_k)
+
+            # size the page to the content so the tables aren't lost in whitespace
+            n1, n2 = len(rows_kr) + 1, len(rows_pm) + 1
+            fig_h = 1.6 + 0.30 * (n1 + n2)
+            fig, (ax1, ax2) = plt.subplots(
+                2, 1, figsize=(8.5, fig_h),
+                gridspec_kw={'height_ratios': [n1, n2], 'hspace': 0.5})
+            fig.suptitle(f"{kernel.capitalize()} kernel — {noise_type}",
+                         fontsize=12, fontweight="bold")
+            _draw_table(ax1, cols_kr, rows_kr,
+                        f"Known {kernel} kernel properties and estimated kernel "
+                        f"properties with {noise_caption_plain(noise_type)}.",
+                        hline_after={1})
+            _draw_table(ax2, cols_pm, rows_pm,
+                        f"Performance metrics using the {kernel} kernel with "
+                        f"{noise_caption_plain(noise_type)}.")
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+    print(f"Wrote: {outpath}")
+
+
+
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
     df = pd.read_csv(CSV_PATH)
 
-    # Normalize column names (strip whitespace)
     df.columns = [c.strip() for c in df.columns]
 
     required = [
@@ -368,13 +498,12 @@ def main():
         "CorrelationTime",
         "FinalSigma",
         "L2",
-        # SolveTime_min is optional but strongly recommended; we check below.
+     
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns in CSV: {missing}")
 
-    # numeric columns
     num_cols = [
         "Noise Level",
         "Mass_m0",
@@ -416,9 +545,12 @@ def main():
         print(f"Wrote: {out1}")
         print(f"Wrote: {out2}")
 
+    # all tables for this noise type in one PDF
+    write_tables_pdf(df, kernels, noise_type,
+                     os.path.join(OUTDIR, f"tables_{noise_type}.pdf"))
+
 
 if __name__ == "__main__":
-    # workspace:
     ws = os.path.join("known_kernels", "python_make")
 
     # noise types:
@@ -445,14 +577,12 @@ if __name__ == "__main__":
             "bimodal": 7.68,
         }
 
-        # how to display method names in LaTeX
         METHOD_LABELS = {
             "Cirpka": r"\shortstack{Modified\\Cirpka}",
             "Learn": r"Learn",
         }
 
-        # kernels to generate tables for (if None, infer from CSV unique values)
         KERNELS: Optional[list[str]] = None
 
-        # generate latex tables:
+        # gen latex tables:
         main()

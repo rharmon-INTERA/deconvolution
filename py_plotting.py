@@ -77,12 +77,12 @@ def plot_known_kernels(figdir='.'):
             data = pd.read_csv(os.path.join(rdir, f'{kernel}.csv'))
             ax = axes[kernel_types.index(kernel)]
             # main y axis:
-            l1, = ax.plot(data['time'], data['input'], linewidth=1.25, label='Input ignal',color='grey')
+            l1, = ax.plot(data['time'], data['input'], linewidth=1.25, label='Input signal',color='grey')
             l2, = ax.plot(data['time'], data['output'], linewidth=1.25, label='Output signal',color='black')
             
             # add to secondary y axis:
             ax2 = ax.twinx()
-            l3, = ax2.plot(data['time'], data['kernel'],'k--', linewidth=1.25,color='black', label='Known Kernel')
+            l3, = ax2.plot(data['time'], data['kernel'],'k--', linewidth=1.25,color='black', label='Selected Kernel')
             
             ax.set_title(f'{kernel.capitalize()}', fontsize=10)
             
@@ -383,8 +383,13 @@ def plot_gambill(ws='.',rchnm='R2',dlvl='medQ',axes_pair=None,leg=False):
                     'highQ': r'$Q = 1.0\ \mathrm{m^3/s}$',}
 
     
-    sim = pd.read_csv(os.path.join(ws,f'{dlvl}_{rchnm}_learn_sim.csv'))
-    data = pd.read_csv(os.path.join(ws,f'{dlvl}_{rchnm}_learn_data_and_results.csv'))
+    sim_fp = os.path.join(ws, f'{dlvl}_{rchnm}_learn_sim.csv')
+    data_fp = os.path.join(ws, f'{dlvl}_{rchnm}_learn_data_and_results.csv')
+    if not (os.path.isfile(sim_fp) and os.path.isfile(data_fp)):
+        print(f"plot_gambill: missing outputs for {dlvl}_{rchnm}_learn — skipping panel")
+        return False
+    sim = pd.read_csv(sim_fp)
+    data = pd.read_csv(data_fp)
     er = False
     if 'A_MIM' in rchnm or 'B_MIM' in rchnm:
         er = True
@@ -393,11 +398,8 @@ def plot_gambill(ws='.',rchnm='R2',dlvl='medQ',axes_pair=None,leg=False):
             rchnm = rchnm.replace('A_MIM', '')
         if 'B_MIM' in rchnm:
             rchnm = rchnm.replace('B_MIM', '')
-    print(er)
-
     ax = axes_pair[0]
     
-    #ax.set_title(f'{discharge_dict[dlvl]}', fontsize=10)
     ax.plot(data['time'], data['transfer_func_mean'], '--', color='navy', linewidth=0.75,label='Ensemble mean', zorder=4)
     ax.plot(data['time'], data['transfer_func_p10'].values,color='lightgrey', zorder=2)
     ax.plot(data['time'], data['transfer_func_p90'].values,color='lightgrey', zorder=2)
@@ -469,6 +471,8 @@ def plot_gambill(ws='.',rchnm='R2',dlvl='medQ',axes_pair=None,leg=False):
     if dlvl != 'highQ':
         ax.set_xticklabels([])
 
+    return True
+
 
 def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
     subplot_labels = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
@@ -480,7 +484,7 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
         rchnm=rchnm
         dlvl='lowQ'
         ws = os.path.join(mws,f'{dlvl}_{rchnm}_learn')
-        plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax12,leg=True)
+        ok_low = plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax12,leg=True)
         axes[0, 0].text(0.15, 0.98,
                 subplot_labels[0],
                 transform=axes[0, 0].transAxes,
@@ -500,7 +504,7 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
         rchnm=rchnm
         dlvl='medQ'
         ws = os.path.join(mws,f'{dlvl}_{rchnm}_learn')
-        plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax34)
+        ok_med = plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax34)
         axes[1, 0].text(0.15, 0.98,
                 subplot_labels[2],
                 transform=axes[1, 0].transAxes,
@@ -520,7 +524,7 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
         rchnm=rchnm
         dlvl='highQ'
         ws = os.path.join(mws,f'{dlvl}_{rchnm}_learn')
-        plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax56)
+        ok_high = plot_gambill(ws=ws, rchnm=rchnm, dlvl=dlvl, axes_pair=ax56)
         axes[2, 0].text(0.15, 0.98,
                 subplot_labels[4],
                 transform=axes[2, 0].transAxes,
@@ -536,6 +540,11 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
                 zorder=50, clip_on=False
             )
 
+        if not (ok_low or ok_med or ok_high):
+            print(f"plot_reach: no outputs found for reach {rchnm} — skipping {pdf_nm}")
+            plt.close(fig)
+            return
+
         plt.tight_layout()
         # save:
         pdf.savefig(fig, bbox_inches='tight')
@@ -544,8 +553,8 @@ def plot_reach(pdf_nm='reach#.pdf',rchnm='R2'):
 
 
 def plot_gambill_compare_highQ_R1(
-    mws_learn=os.path.join('field_studies','gambill','python_make','outputs_learn'),
-    mws_cirpka=os.path.join('field_studies','gambill','python_make','outputs_cirpka'),
+    mws_learn=os.path.join('field_studies','gambill','python_make','outputs'),
+    mws_cirpka=os.path.join('field_studies','gambill','python_make','outputs'),
     rchnm='R1',
     dlvl='highQ',
     outpath=None,
@@ -557,20 +566,18 @@ def plot_gambill_compare_highQ_R1(
     ec_ylim=(0, 25),
     add_legend=True,
 
-    # --- NEW: inset controls for panel (c)
     ec_inset=False,
-    ec_inset_xlim=None,   # (x1, x2)
-    ec_inset_ylim=None,   # (y1, y2)
+    ec_inset_xlim=None,   
+    ec_inset_ylim=None,   
     ec_inset_bbox=(0.62, 0.33, 0.36, 0.34),  # (x0, y0, w, h) in ax_c axes fraction
     ec_inset_label="",
     ec_inset_grid=True,
 
-    # --- NEW: percentile band controls
     show_tf_pbands=True,
-    pb_ls=":",          # dotted
+    pb_ls=":",         
     pb_lw=1.5,
     pb_alpha=0.9,
-    log_floor=1e-12,    # avoid log(0) on p10/p90
+    log_floor=1e-12,  
 ):
     """
     Creates a 3-panel figure:
@@ -599,11 +606,10 @@ def plot_gambill_compare_highQ_R1(
         data = pd.read_csv(data_fp)
         return ws, sim, data
 
-    # Load both methods
+
     _, sim_learn,  data_learn  = _load("learn",  mws_learn)
     _, sim_cirpka, data_cirpka = _load("cirpka", mws_cirpka)
 
-    # Ensure needed columns exist
     needed_base = ["time", "transfer_func_mean"]
     needed_p = ["transfer_func_p10", "transfer_func_p90"]
     for nm, d in [("learn", data_learn), ("cirpka", data_cirpka)]:
@@ -615,7 +621,6 @@ def plot_gambill_compare_highQ_R1(
             if missing_p:
                 raise KeyError(f"{nm} data/results CSV missing columns: {missing_p}")
 
-    # Figure layout
     fig = plt.figure(figsize=figsize)
     gs = GridSpec(
         nrows=2, ncols=2,
@@ -628,8 +633,8 @@ def plot_gambill_compare_highQ_R1(
     ax_c = fig.add_subplot(gs[:, 1])
 
     # Style constants
-    col_learn = "tab:blue"
-    col_cirp  = "grey"
+    col_learn = "#0A6092"
+    col_cirp  = "#E69F00"
     ls_mean_learn = "-"
     ls_mean_cirp  = "--"
 
@@ -686,7 +691,6 @@ def plot_gambill_compare_highQ_R1(
     )
 
     if show_tf_pbands:
-        # guard against zeros/negatives in log-scale plot
         lp10 = np.maximum(data_learn["transfer_func_p10"].to_numpy(), log_floor)
         lp90 = np.maximum(data_learn["transfer_func_p90"].to_numpy(), log_floor)
         cp10 = np.maximum(data_cirpka["transfer_func_p10"].to_numpy(), log_floor)
@@ -772,9 +776,7 @@ def plot_gambill_compare_highQ_R1(
 
         ax_c.indicate_inset_zoom(ax_c_inset, edgecolor="0.3", linewidth=0.8)
 
-    # -------------------------
-    # tick styling
-    # -------------------------
+
     for ax in (ax_a, ax_b, ax_c):
         ax.tick_params(axis='both', which='both', length=0)
         ax.tick_params(axis='both', which='major',
@@ -802,7 +804,6 @@ def plot_gambill_compare_highQ_R1(
               ha="left", va="top", fontsize=11, fontweight="bold", zorder=50)
 
     if add_legend:
-        # panel (a): legend includes mean + p10/p90 labels (but won’t repeat p90 duplicates)
         ax_a.legend(loc="upper right", fontsize=8, frameon=True)
         ax_c.legend(loc="upper right", fontsize=8, frameon=True)
 
@@ -880,15 +881,21 @@ def plot_estimated_covariance_by_kernel(
 
         y = np.maximum(y, 1e-12)
 
+        dt_cov = x[1] - x[0] if len(x) > 1 else 1.0
+        cov_raw = cov_df['covariance'].values
+        cov0 = cov_raw[0] if cov_raw[0] > 1e-16 else 1e-16
+        corr_time = dt_cov * np.sum(cov_raw) / cov0
+
         ax.semilogy(
             x, y,
-            label=mlabel,
+            label=f'{mlabel}  ($T_c$ = {corr_time:.3g} hr)',
             **method_styles[mkey]
         )
 
     ax.set_xlabel('Time lag [hr]')
     ax.set_ylabel('Estimated covariance [1/hr$^2$]')
     ax.set_title(f'Known {kernel.capitalize()} kernel', fontsize=10)
+    ax.set_ylim(bottom=1e-7)
     ax.grid(True, which='both', alpha=0.4)
     ax.minorticks_on()
 
@@ -921,7 +928,7 @@ if __name__ == "__main__":
     set_graph_specifications()
     figdir = os.path.join('known_kernels','python_make','figs_known_kernels')
 
-    #plot_known_kernels(figdir=figdir)
+    plot_known_kernels(figdir=figdir)
     
     results_dir = os.path.join('known_kernels','python_make')
     plot_deconv_results(results_dir, noise_type='on-out',inset_on=False)
@@ -944,18 +951,6 @@ if __name__ == "__main__":
         # right side, vertically centered (tweak if needed)
         ec_inset_bbox=(0.57, 0.34, 0.35, 0.32),
         ec_inset_label="",
-    )
-    
-    plot_gambill_compare_highQ_R1(
-        rchnm="R1",
-        dlvl="lowQ",
-        outpath=os.path.join(figdir, "gambill_lowQ_R1_compare.pdf"),
-        ec_inset=True,
-        ec_inset_xlim=(3.62, 3.82),
-        ec_inset_ylim=(14.8, 15.5),
-        # right side, vertically centered (tweak if needed)
-        ec_inset_bbox=(0.57, 0.34, 0.35, 0.32),
-        ec_inset_label="zoom",
     )
     
     plot_estimated_covariance_by_kernel(

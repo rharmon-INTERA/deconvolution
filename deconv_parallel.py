@@ -1,4 +1,8 @@
 import os
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+           "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+import contextlib
 import sys
 sys.path.insert(0,os.path.abspath(os.path.join('known_kernels','python_make')))
 import numpy as np
@@ -17,8 +21,14 @@ import time as time_mod
 import warnings
 warnings.filterwarnings("ignore")
 
-import kwn_kernel_make as make_kern 
+import kwn_kernel_make as make_kern
 import py_plotting as pyplt
+
+
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:
+    threadpool_limits = None
 
 
 def available_cpu_count():
@@ -33,30 +43,35 @@ def compute_single_realization_checked(args):
         h (np.ndarray shape (n_h,)): realization
         converged (bool): True if active set stabilized within iter limit
     """
-    C, J, iQ, y, sigma, sigma_max, n_h, dt = args
+    C, J, iQ, y, sigma, sigma_max, n_h, dt, seed = args
 
-    # Unconditional realization:
-    h_uc = C.T @ np.random.randn(n_h)
-    # Add measurement error:
-    me = sigma * np.random.randn(len(y))
+    # each real gets its own generator. Do NOT use the global np.random
+    # here: forked workers inherit the parent's global RNG state and would draw
+    # identical reals.
+    rng = np.random.default_rng(seed)
 
-    hL = []   # indices of active nonnegativity constraints
+    # unconditional real:
+    h_uc = C.T @ rng.standard_normal(n_h)
+    # add measurement error:
+    me = sigma * rng.standard_normal(len(y))
+
+    # sigma, J, iQ, h_uc and me are all fixed for this real, so the
+    # unconstrained blocks are identical on every active-set pass. Build them
+    # once here rather than rebuilding them up to n times below.
+    JRJ = J.T @ J / sigma**2
+    u = np.ones((n_h, 1))
+
+    umat = np.block([[JRJ + iQ, JRJ @ u],
+                     [u.T @ JRJ, u.T @ JRJ @ u]])
+
+    _resid = J.T @ (y + me) / sigma**2 - JRJ @ h_uc
+    urhs = np.concatenate([_resid.ravel(), (u.T @ _resid).ravel()])
+
+    hL = []   # indices of active nonneg constraints
     nL = 0
     converged = False
 
     for _ in range(50):
-        JRJ = J.T @ J / sigma**2
-        u = np.ones((n_h, 1))
-
-        # augmented system for unknowns [h, alpha] (alpha scalar)
-        umat = np.block([[JRJ + iQ, JRJ @ u],
-                         [u.T @ JRJ, u.T @ JRJ @ u]])
-
-        urhs = np.concatenate([
-            (J.T @ (y + me) / sigma**2 - JRJ @ h_uc).ravel(),
-            (u.T @ (J.T @ (y + me) / sigma**2 - JRJ @ h_uc)).ravel()
-        ])
-
         if nL > 0:
             Lmat = np.zeros((n_h + 1, nL))
             Lrhs = np.zeros(nL)
@@ -75,16 +90,16 @@ def compute_single_realization_checked(args):
         if len(a) > n_h + 1:
             a[n_h + 1:] = 1.0
 
-        imat = la.inv(np.diag(1 / a) @ mat) @ np.diag(1 / a)
+        inv_a = 1.0 / a
+        imat = la.inv(mat * inv_a[:, None]) * inv_a[None, :]
         sol = imat @ rhs
 
         h = sol[:n_h] + sol[n_h] + h_uc
         if nL > 0:
             h[hL] = 0.0
 
-        nu = sol[n_h + 1:]  # Lagrange multipliers for active constraints
+        nu = sol[n_h + 1:]  
 
-        # active-set update (same logic as your code)
         hLold = list(hL)
         hLadd = list(np.where(h < 0)[0])
         hLrem = [hL[j] for j in range(len(nu)) if nu[j] > 0] if nL > 0 else []
@@ -102,7 +117,7 @@ def compute_single_realization_checked(args):
 
 def draw_accepted_realizations(C, J, iQ, y, sigma, sigma_max, n_h, dt,
                                nreal_target, max_attempts_factor=50,
-                               parallel=False, cpu_cnt=None):
+                               parallel=False, cpu_cnt=None, seed_seq=None):
     """
     Returns:
       h_all_real: (n_h, nreal_target) array of accepted realizations
@@ -111,10 +126,14 @@ def draw_accepted_realizations(C, J, iQ, y, sigma, sigma_max, n_h, dt,
     attempts = 0
     max_attempts = max_attempts_factor * nreal_target
 
+    ss = np.random.SeedSequence() if seed_seq is None else seed_seq
+
     if not parallel:
         while len(accepted) < nreal_target and attempts < max_attempts:
             attempts += 1
-            h, ok = compute_single_realization_checked((C, J, iQ, y, sigma, sigma_max, n_h, dt))
+            (child,) = ss.spawn(1)
+            h, ok = compute_single_realization_checked(
+                (C, J, iQ, y, sigma, sigma_max, n_h, dt, child))
             if ok:
                 accepted.append(h)
         if len(accepted) < nreal_target:
@@ -124,14 +143,17 @@ def draw_accepted_realizations(C, J, iQ, y, sigma, sigma_max, n_h, dt,
             )
         return np.column_stack(accepted)
 
-    # Parallel version: do in batches, filter accepted, repeat until filled
     from multiprocessing import Pool
 
+    limits = (threadpool_limits(limits=1, user_api="blas")
+              if threadpool_limits is not None else contextlib.nullcontext())
+
     batch = max(nreal_target, (cpu_cnt or 1) * 2)
-    with Pool(cpu_cnt) as pool:
+    with limits, Pool(cpu_cnt) as pool:
         while len(accepted) < nreal_target and attempts < max_attempts:
-            # submit a batch
-            args_list = [(C, J, iQ, y, sigma, sigma_max, n_h, dt) for _ in range(batch)]
+            # submit a batch, each realization with its own independent seed
+            children = ss.spawn(batch)
+            args_list = [(C, J, iQ, y, sigma, sigma_max, n_h, dt, ch) for ch in children]
             results = pool.map(compute_single_realization_checked, args_list)
             attempts += batch
             for h, ok in results:
@@ -149,10 +171,9 @@ def draw_accepted_realizations(C, J, iQ, y, sigma, sigma_max, n_h, dt,
     return np.column_stack(accepted)
 
 def deconv_parallel(df, num_dets, prefix='bimodal'):
-    # Load signals from dataframe
-    t = df['time'].values.copy()            # time vector
-    inp = df['input'].values.copy()         # input signal
-    out_signal = df['output'].values.copy() # output signal
+    t = df['time'].values.copy()           
+    inp = df['input'].values.copy()         
+    out_signal = df['output'].values.copy()
     
     x = np.asarray(inp, dtype=float).copy()
     y = np.asarray(out_signal, dtype=float).copy()
@@ -181,7 +202,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     else:
         cpu_cnt = None
 
-    # User-defined numerical details
+    # user-defined num details
     theta = float(num_dets['theta'])
     corr_time = float(num_dets['corr_time'])
     sigma = float(num_dets['sigma'])
@@ -189,14 +210,14 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     n_h = int(num_dets['n_h'])
     nreal = int(num_dets['nreal'])
     method = str(num_dets['method']).lower()
-    theta_converg = float(num_dets.get('theta_converg', 0.0))
+    max_outer = int(num_dets.get('max_outer', 25))
 
     np.random.seed()
 
     x = inp.copy()
     y = out_signal.copy()
 
-    # Add noise to y (known kernels only)
+    # add noise to y (known kernels only)
     if k_type in ['bimodal', 'chapeau', 'gamma']:
         if noise_type == 'on-out':
             desired_std = num_dets['sigma']
@@ -219,7 +240,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
         act_std = 0.0
         print("No noise added to output signal (field).")
 
-    # Time increment and covariance setup
+    # time increment and cov setup
     dt = t[1] - t[0]
     corr_time = min(n_h * dt, corr_time)
     n_corr_time = int(np.ceil(corr_time / dt))
@@ -227,12 +248,12 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     # ---- start wall-clock timing ----
     t_start = time_mod.perf_counter()
 
-    # Initial triangular covariance (first guess)
+    # init cov(first guess)
     cov = np.zeros(n_h)
     if n_corr_time > 0:
         cov[:n_corr_time] = (theta / n_corr_time) * np.arange(n_corr_time, 0, -1)
 
-    # Construct Jacobian (convolution matrix)
+
     input_fn = dt * x.copy()
     input_fn[input_fn < 1e-8] = 0.0
     r_vec = dt * np.zeros(n_h)
@@ -242,31 +263,35 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     outer_iter = 0
     theta_old = 0.0
 
-    while (rel_cov_change > 0.1) and (abs(theta_old - theta) / max(theta, 1e-16) >= theta_converg):
+    while rel_cov_change > 1 and outer_iter < max_outer:
         outer_iter += 1
         print(f"Outer iteration {outer_iter}: rel_cov_change = {rel_cov_change:.3g}")
         print(f"theta change: {abs(theta_old - theta) / max(theta, 1e-16)}")
 
-        # Rebuild J each iter
         input_fn = dt * x.copy()
         input_fn[input_fn < 1e-8] = 0.0
         r_vec = dt * np.zeros(n_h)
         J = toeplitz(input_fn, r_vec)
 
         # Olaf's linear with current theta, then overwrite with current cov
-        if method == 'cirpka':
-            c = dt * theta * np.arange(n_h, 0, -1)
-        else:
-            c = dt * theta * np.arange(n_h, 0, -1)
-            c[:len(cov)] = cov
+        c = dt * theta * np.arange(n_h, 0, -1)
+        c[:len(cov)] = cov
 
         Q = toeplitz(c)
         epsilon = 1e-8
         Q += epsilon * np.eye(n_h)
-        C = la.cholesky(Q, lower=False)
+        try:
+            C = la.cholesky(Q, lower=False)
+        except np.linalg.LinAlgError:
+            d, v = np.linalg.eigh(Q)
+            print(f"  Q not positive definite (min eig {d.min():.3g}); clipping negative eigenvalues")
+            d[d < 0] = 1e-10
+            Q = (v * d) @ v.T
+            Q = 0.5 * (Q + Q.T)
+            C = la.cholesky(Q, lower=False)
         iQ = la.inv(Q)
 
-        # ----- Best-estimate (me=0, h_uc=0) with nonnegativity -----
+        # ----- best-est with nonnegs -----
         hL = []
         nL = 0
         iter_inner = 0
@@ -311,7 +336,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
 
             nu = sol[n_h + 1:n_h + 1 + nL]
 
-            # Update sigma from best-estimate residuals
+            # upd sigma from best-est resids
             sim = J @ h_be
             denom = max(1, len(y) - n_h + nL - 1)
             sigma = float(np.sqrt(np.dot(y - sim, y - sim) / denom))
@@ -320,7 +345,6 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             if iter_inner == 1 or iter_inner % 2 == 0:
                 print(f"  inner {iter_inner:02d}: sigma={sigma:.4g}, nL={nL}")
 
-            # Active-set update
             hLold = list(hL)
             hLadd = list(np.where(h_be < 0)[0])
             hLrem = [hL[j] for j in range(len(nu)) if nu[j] > 0] if nL > 0 else []
@@ -329,7 +353,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
 
             if sorted(hLold) == sorted(hL):
                 break
-        # ----- End best-estimate -----
+        # ----- end best-est -----
 
 
         h_all_real = draw_accepted_realizations(
@@ -340,25 +364,26 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             parallel=bool(num_dets.get('parallel', False)),
             cpu_cnt=cpu_cnt
         )
-        nreal_eff = nreal  # accepted realizations count
-        h_all = np.column_stack([h_be, h_all_real])  # include best-estimate as first column
+        nreal_eff = nreal  # accepted reals count
+        h_all = np.column_stack([h_be, h_all_real])
 
 
-        # ----- Covariance Update -----
+        # ----- cov update -----
         old_cov = cov.copy()
 
-        def sumprob(lntheta):
-            theta_test = np.exp(lntheta)
+        def sumprob(lnval):
+            # Modified-Cirpka: -(num_nonzero/2)*log(4*pi*theta*dt) - sum(diff^2)/(4*theta*dt)
+            # Counting only nonzero entries (not n_h-1) keeps theta invariant to the
+            # zero tail, so the estimate does not depend on the chosen kernel length.
+            theta_test = np.exp(lnval)
+            thetadt = theta_test * dt
             lnpsum = 0.0
-            ng = h_all.shape[0]
-            # match your original Python behavior (uses first nreal columns of h_all)
             for i in range(nreal_eff):
                 h_i = h_all[:, i]
                 num_nonzero = np.sum(h_i > 0)
-                lnp_i = -num_nonzero/2.0 * np.log(4.0*np.pi*theta_test) - (ng - 1)/2.0 * np.log(1.0)
                 dif = np.diff(h_i)
-                lnp_i -= (dif @ dif) / (4.0*theta_test)
-                lnpsum -= lnp_i
+                lnpsum += 0.5*num_nonzero*np.log(4.0*np.pi*thetadt)
+                lnpsum += (dif @ dif) * 0.25 / thetadt
             return float(np.real(lnpsum))
 
         x0 = np.log(max(theta, 1e-12))
@@ -368,10 +393,12 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
         theta_old = theta
         theta = float(np.exp(res[0]))
 
-        # triangular cov from theta
-        cov = np.zeros(n_h)
-        if n_h > 1:
-            cov[:n_h] = (theta / (n_h - 1)) * np.arange(n_h - 1, -1, -1)
+        if method == 'cirpka':
+            cov = dt * theta * np.arange(n_h, 0, -1)
+        else:
+            cov = np.zeros(n_h)
+            if n_h > 1:
+                cov[:n_h] = (theta / (n_h - 1)) * np.arange(n_h - 1, -1, -1)
 
         if method != 'cirpka':
             # empirical cov from mean h via FFT
@@ -383,7 +410,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             cov_emp = np.maximum(0.0, cov_emp)
             int_cov = dt * np.sum(cov_emp)
             if int_cov > 0:
-                cov_emp *= (int_cov / (dt * np.sum(cov_emp)))  # renorm (no-op but safe)
+                cov_emp *= (int_cov / (dt * np.sum(cov_emp))) 
 
             cov = cov_emp
             theta = cov[0]
@@ -398,29 +425,29 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
                 if n_corr_time > 1:
                     cov[:n_corr_time] = (theta / (n_corr_time - 1)) * np.arange(n_corr_time - 1, -1, -1)
 
-        # Relative covariance change (unchanged from your Python)
-        int_cov = dt * np.sum(cov) if cov.size else 1.0
         length_comp = min(len(cov), len(old_cov))
-        # --- Relative covariance change (MATCH MATLAB) ---
-        length_comp = min(len(cov), len(old_cov))
-        numer = np.sqrt(dt * np.sum((cov[:length_comp] - old_cov[:length_comp])**2))
-
-        cov0 = float(cov[0]) if len(cov) else 1.0
-        cov0 = max(cov0, 1e-16)
-
         snr = sigma / max(float(np.max(y)), 1e-16)
         snr = max(snr, 1e-16)
 
-        rel_cov_change = float(numer / cov0 / snr)
+        # new_cirpka.m: sqrt(n_g*sum(dcov^2))/sum(cov)/(sigma/max(y))
+        numer = np.sqrt(n_h * np.sum((cov[:length_comp] - old_cov[:length_comp])**2))
+        denom = max(float(np.sum(cov[:length_comp])), 1e-16)
+        rel_cov_change = float(numer / denom / snr)
         print("Relative covariance change:", rel_cov_change)
+        print(f"  theta={theta:.4g}, sigma={sigma:.4g}, snr={snr:.3g}, "
+              f"numer={numer:.3g}, denom={denom:.3g}")
 
-        # Finalize ensemble stats for this outer iter
+        # finalize ensemble stats for this outer iter
         h_all = np.real(h_all)
         h_mean = np.mean(h_all, axis=1)
         if k_type in ['bimodal', 'chapeau', 'gamma']:
             L_2 = np.sqrt(dt * np.sum((h_mean - kernel[:len(h_mean)]) ** 2))
 
-    # ===== Final stats & save (same as your code below) =====
+    if rel_cov_change > 1:
+        print(f"WARNING: outer loop stopped at max_outer={max_outer} without converging "
+              f"(rel_cov_change={rel_cov_change:.3g}, theta={theta:.4g}, sigma={sigma:.4g})")
+
+    # ===== final stats, figs, & save  =====
     t_end = time_mod.perf_counter()
     solve_time_sec = t_end - t_start
     solve_time_min = solve_time_sec / 60.0
@@ -456,7 +483,9 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     plt.xlim([0, num_dets['corr_time']])
     plt.legend(loc='best')
 
-    # Build results table (same schema as your original)
+    # build results table 
+    total_reals = outer_iter * nreal
+
     if k_type in ['bimodal', 'chapeau', 'gamma']:
         results_table = pd.DataFrame({
             'Method': [method.capitalize()],
@@ -470,6 +499,9 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             'L2': [L_2],
             'SolveTime_sec': [solve_time_sec],
             'SolveTime_min': [solve_time_min],
+            'Nreal': [nreal],
+            'OuterIters': [outer_iter],
+            'TotalRealizations': [total_reals],
         })
     else:
         results_table = pd.DataFrame({
@@ -482,6 +514,9 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
             'FinalSigma': [sigma],
             'SolveTime_sec': [solve_time_sec],
             'SolveTime_min': [solve_time_min],
+            'Nreal': [nreal],
+            'OuterIters': [outer_iter],
+            'TotalRealizations': [total_reals],
         })
 
     print(f"Solve time ({method}): {solve_time_sec:.2f} s ({solve_time_min:.2f} min)")
@@ -489,8 +524,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     csv_filename = prefix + '_' + method + '_stats.csv'
     results_table.to_csv(os.path.join(stats_out, csv_filename), index=False)
 
-    # Minimal return consistent with your original
-    df_subset = df.iloc[:min(300, len(df))].copy()
+    df_subset = df.iloc[:min(300, n_h, len(df))].copy()
     df_subset['time'] = t_h[:len(df_subset)]
     df_subset['input'] = x[:len(df_subset)]
     df_subset['output'] = y[:len(df_subset)]
@@ -501,7 +535,7 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
     df_subset['transfer_func_p90'] = h_p90[:len(df_subset)]
     df_subset.to_csv(os.path.join(results_out, prefix + '_data_and_results.csv'), index=False)
     
-    # save best estimate simulation:
+    # save best est sim:
     y_pred = (J @ h_mean).ravel()   # ensure 1-D array
     bsim = pd.DataFrame({
         'time': df['time'].values.copy(),
@@ -519,10 +553,10 @@ def deconv_parallel(df, num_dets, prefix='bimodal'):
 if __name__ == '__main__':
     
     # run control vars:
-    run_knwn_kernels = True
-    noise_type = 'on-out' # must be 'on-out','on-in-before-conv', or 'on-in-after-conv', needed for knwn kernels
+    run_knwn_kernels = False
+    noise_type = 'on-in-after-conv'# must be 'on-out','on-in-before-conv', or 'on-in-after-conv', needed for knwn kernels
     
-    run_gambill = False
+    run_gambill = True
     
     plot_figs = True
     
@@ -545,7 +579,7 @@ if __name__ == '__main__':
             
             noise_levels = [0.005, 0.03,0.09] # this is noise added onto output signal
             results_dict = {}
-            methods = ['learn','cirpka']
+            methods = ['cirpka', 'learn']#,
             for method in methods:
                 run_key = f'{kernel_shape}_{method}'
                 for nl in noise_levels:
@@ -564,10 +598,10 @@ if __name__ == '__main__':
                     run_key += f'_{nl}'
                     if nl > sigma_max:
                         sigma_max = nl + 0.03
-                    num_dets = {'theta': 0.02, 'corr_time': 40, 
-                                'sigma': nl, 'sigma_max': sigma_max, 
+                    num_dets = {'theta': 0.02, 'corr_time': 40,
+                                'sigma': nl, 'sigma_max': sigma_max,
                                 'n_h': 300,'nreal': 56, 'parallel': run_in_parallel,
-                                'method':method, 'theta_converg':0.0}
+                                'method':method}
                     nl = f'{nl:.3f}'
                     results, stats = deconv_parallel(df, num_dets, prefix=f'{method}_{kernel_shape}_{noise_type}_{nl}')
                     results_dict[run_key] = {
@@ -580,7 +614,6 @@ if __name__ == '__main__':
 
 
     
-            
     if run_gambill:
         ws = os.path.join('field_studies', 'gambill', 'data')
         list_csv_files = [f for f in os.listdir(ws) if f.endswith('.csv')]
@@ -588,8 +621,6 @@ if __name__ == '__main__':
         sites = [f[:-4] for f in list_csv_files]
         # drop sites ending '_MIM'
         sites = [s for s in sites if not s.endswith('_MIM')]
-        
-        method = 'learn'  # 'learn' or 'cirpka'
         
         nl = 1
         sigma_max = 5.0
@@ -645,38 +676,36 @@ if __name__ == '__main__':
         sites_dict = {
             'lowQ_R1': {'theta': 1e-4, 'corr_time': 10,
                         'sigma': 0.231, 'sigma_max': 1.,
-                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
-                        'method': method,'theta_converg':0.0001},
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel},
             'medQ_R1': {'theta': 1e-4, 'corr_time': 10,
                         'sigma': 0.231, 'sigma_max': 1.0,
-                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel,
-                        'method': method, 'theta_converg':0.0},
-            'highQ_R1': {'theta': 1e1, 'corr_time': 8,
-                        'sigma': 0.0001, 'sigma_max': 5,
-                        'n_h': 400, 'nreal': 60, 'parallel': run_in_parallel,
-                        'method': method,'theta_converg':0.0},
+                        'n_h': 300, 'nreal': 56, 'parallel': run_in_parallel},
+            'highQ_R1': {'theta': 1.0, 'corr_time': 0.2,
+                        'sigma': 0.03, 'sigma_max': 0.5,
+                        'n_h': 40, 'nreal': 20, 'parallel': run_in_parallel},
 
-            }        
+            }
         
-        for site in sites:
-            if site in sites_dict:
-                file_path = os.path.join(ws, site + '.csv')
-                df = pd.read_csv(file_path)
-                df = df.rename(columns={'in': 'input', 'out': 'output'})
-                num_dets = sites_dict[site]
-                results, stats = deconv_parallel(df, num_dets, prefix=f'{site}_{method}')
+        for method in ['cirpka', 'learn']:
+            for site in sites:
+                if site in sites_dict:
+                    file_path = os.path.join(ws, site + '.csv')
+                    df = pd.read_csv(file_path)
+                    df = df.rename(columns={'in': 'input', 'out': 'output'})
+                    num_dets = dict(sites_dict[site])
+                    num_dets['method'] = method
+                    results, stats = deconv_parallel(df, num_dets, prefix=f'{site}_{method}')
 
-                print(f"Deconvolution for site {site} completed.")
+                    print(f"Deconvolution for site {site} ({method}) completed.")
+
+        if plot_figs:
+            figdir = os.path.join('field_studies', 'gambill', 'python_make', 'gambill_figs')
+            os.makedirs(figdir, exist_ok=True)
+            for site in sites:
+                if site in sites_dict:
+                    dlvl, rchnm = site.split('_', 1)
+                    pyplt.plot_gambill_compare_highQ_R1(
+                        rchnm=rchnm, dlvl=dlvl,
+                        outpath=os.path.join(figdir, f'gambill_{site}_compare.pdf'),
+                    )
                 
-    # 11/10 notes all examples run, but cirpka looks like it has an issue probs zero start. Next steps,
-    # run gambill data and use parallel processing to confirm it works. Then need to get plottting and latex
-    # tables upadted and in the draft. Then clean repo and add readme.
-
-    # 12/1-8 notes: 
-    #   - re-test bef_conv noise addition (done)
-    #   - add tim it and save n outer iters to stats
-    #   - finalize latex tabl gen 
-    #   - mention to Dave the converg issue with no noise case, seems that atleast 0.005 noise is needed for stable runs across all cases
-    #   - comapre Cirpka and learn on Gambill data, quantify differences from obs out, comp time, and # outter iters 
-    #   - get the final set of matlab run scripts organized and into git repo
-
